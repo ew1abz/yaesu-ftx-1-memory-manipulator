@@ -1,0 +1,14 @@
+[package]
+authors = ["Vladimir K <ew1abz@gmail.com>"]
+edition = "2021"
+readme = "README.md"
+name = "ftdx-1chm"
+version = "0.1.0"
+
+[dependencies]
+log = { version = "0.4", features = ["release_max_level_off"] }
+env_logger = "0.11.8"
+serialport = "4.8.1"
+serde = { version = "1.0", features = ["derive"] }
+csv = "1.3"
+indicatif = "0.18.3"
