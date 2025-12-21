@@ -1,14 +1,42 @@
+use ftdx_1chm::ftx1::MemoryChannel;
 use indicatif::ProgressBar;
 use log::{debug, error};
+use serde::Serialize;
 use std::io;
 use std::time::Duration;
 
 mod ftx1;
 
 const RX_BUFFER_SIZE: usize = 255;
+const CHANNELS: u16 = 100;
+
+#[derive(Debug, Serialize)]
 struct Record {
     mem: ftx1::MemoryRead,
     tag: Option<String>,
+}
+#[derive(Debug, Serialize)]
+struct CsvRecord {
+    #[serde(rename = "Channel Number")]
+    channel: String,
+    #[serde(rename = "Frequency (Hz)")]
+    freq: u32,
+    #[serde(rename = "Memory Tag")]
+    tag: Option<String>,
+    #[serde(rename = "Clarifier Offset (Hz)")]
+    clarifier_offset_hz: String,                  // 5 positions [+0015]
+    #[serde(rename = "Rx Clarifier Enabled")]
+    rx_clarifier_enabled: ftx1::RxClarifierOnOff, // 1 position [0: OFF, 1: ON]
+    #[serde(rename = "Tx Clarifier Enabled")]
+    tx_clarifier_enabled: ftx1::TxClarifierOnOff, // 1 position [0: OFF, 1: ON]
+    #[serde(rename = "Mode")]
+    mode: String,                                 // 1 positions
+    #[serde(rename = "Channel Type")]
+    ch_type: ftx1::ChType, // 1 position [0: VFO 1: Memory Channel 2: Memory Tune 3: Quick Memory Bank (QMB) 4: - 5: PMS]
+    #[serde(rename = "CTCSS Tone")]
+    tone: ftx1::Tone,      // 1 position [0: CTCSS “OFF” 1: CTCSS ENC/DEC 2: CTCSS ENC]
+    #[serde(rename = "Shift (Hz)")]
+    shift: ftx1::Shift,    // 1 position [0: Simplex 1: Plus Shift 2: Minus Shift]
 }
 
 fn main() -> Result<(), ()> {
@@ -21,26 +49,48 @@ fn main() -> Result<(), ()> {
 
     read_validate_id(&mut *port)?;
     let mut db: Vec<Record> = Vec::new();
-    let bar = ProgressBar::new(999);
+    let mut wtr = csv::Writer::from_writer(io::stdout());
+    let mut wtrf = csv::Writer::from_path("output.csv").unwrap();
+    let bar = ProgressBar::new(CHANNELS as u64);
     // ---------
-    for ch in 1..=999 {
+    for ch in 1..=CHANNELS {
         bar.inc(1);
         let mem = read_mem(&mut *port, ch);
         match mem {
             Ok(m) => {
                 let tag = read_tag(&mut *port, ch);
-                db.push(Record { mem: m, tag: tag });
+                db.push(Record { mem: m.clone(), tag: tag.clone() });
+                let csv_record: CsvRecord = CsvRecord {
+                    channel: MemoryChannel::to_chars(&MemoryChannel::Mem(ch))
+                        .unwrap()
+                        .into_iter()
+                        .collect::<String>(),
+                    tag: tag,
+                    freq: m.frequency_hz,
+                    clarifier_offset_hz: m.clarifier_offset_hz.to_string(), // 5 positions [+0015]
+                    rx_clarifier_enabled: m.rx_clarifier_enabled, // 1 position [0: OFF, 1: ON]
+                    tx_clarifier_enabled: m.tx_clarifier_enabled, // 1 position [0: OFF, 1: ON]
+                    mode: m.mode.to_string(),                     // 1 positions
+                    ch_type: m.ch_type, // 1 position [0: VFO 1: Memory Channel 2: Memory Tune 3: Quick Memory Bank (QMB) 4: - 5: PMS]
+                    tone: m.tone,       // 1 position [0: CTCSS “OFF” 1: CTCSS ENC/DEC 2: CTCSS ENC]
+                    shift: m.shift,     // 1 position [0: Simplex 1: Plus Shift 2: Minus Shift]
+                };
+                wtr.serialize(&csv_record).unwrap();
+                wtrf.serialize(&csv_record).unwrap();
             }
             Err(_) => (), //println!("Error: {:?}", e),
         }
     }
     bar.finish();
-    for r in &db {
-        print!("Memory: {:}", &r.mem);
-        if r.tag.is_some() {
-            println!(" Tag: {:}", &r.tag.clone().unwrap());
-        }
-    }
+    // for r in &db {
+    //     print!("Memory: {:}", &r.mem);
+    //     if r.tag.is_some() {
+    //         println!(" Tag: {:}", &r.tag.clone().unwrap());
+    //     }
+    // }
+    // ---------
+    wtr.flush().unwrap();
+    wtrf.flush().unwrap();
 
     Ok(())
 }

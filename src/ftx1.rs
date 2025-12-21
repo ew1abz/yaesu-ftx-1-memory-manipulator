@@ -10,6 +10,74 @@ pub mod parsers;
 use parsers::{buf4_to_i16, buf4_to_u16, buf9_to_u32};
 
 //------------------------------------
+// RX Clarifier
+//------------------------------------
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum RxClarifierOnOff {
+    RxClarifierOff = 0x00,
+    RxClarifierOn = 0x01,
+}
+
+impl fmt::Display for RxClarifierOnOff {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match *self {
+                RxClarifierOnOff::RxClarifierOff => "RxClarifierOff",
+                RxClarifierOnOff::RxClarifierOn => "RxClarifierOn",
+            },
+        )
+    }
+}
+
+impl TryFrom<char> for RxClarifierOnOff {
+    type Error = ();
+
+    fn try_from(item: char) -> Result<Self, Self::Error> {
+        match item {
+            '0' => Ok(RxClarifierOnOff::RxClarifierOff),
+            '1' => Ok(RxClarifierOnOff::RxClarifierOn),
+            _ => Err(()),
+        }
+    }
+}
+
+//------------------------------------
+// TX Clarifier
+//------------------------------------
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum TxClarifierOnOff {
+    TxClarifierOff = 0x00,
+    TxClarifierOn = 0x01,
+}
+
+impl fmt::Display for TxClarifierOnOff {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match *self {
+                TxClarifierOnOff::TxClarifierOff => "TxClarifierOff",
+                TxClarifierOnOff::TxClarifierOn => "TxClarifierOn",
+            },
+        )
+    }
+}
+
+impl TryFrom<char> for TxClarifierOnOff {
+    type Error = ();
+
+    fn try_from(item: char) -> Result<Self, Self::Error> {
+        match item {
+            '0' => Ok(TxClarifierOnOff::TxClarifierOff),
+            '1' => Ok(TxClarifierOnOff::TxClarifierOn),
+            _ => Err(()),
+        }
+    }
+}
+
+//------------------------------------
 // Memory Channel
 //------------------------------------
 // 00000: VFO or MT or QMB (5 Bytes)
@@ -204,9 +272,9 @@ impl fmt::Display for Shift {
 // [0: CTCSS “OFF” 1: CTCSS ENC/DEC 2: CTCSS ENC]
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Tone {
-    Off = 0x00,
-    EncDec = 0x01,
-    Enc = 0x02,
+    CtcssOff = 0x00,
+    CtcssEncDec = 0x01,
+    CtcssEnc = 0x02,
 }
 
 impl TryFrom<char> for Tone {
@@ -214,9 +282,9 @@ impl TryFrom<char> for Tone {
 
     fn try_from(item: char) -> Result<Self, Self::Error> {
         match item {
-            '0' => Ok(Self::Off),
-            '1' => Ok(Self::EncDec),
-            '2' => Ok(Self::Enc),
+            '0' => Ok(Self::CtcssOff),
+            '1' => Ok(Self::CtcssEncDec),
+            '2' => Ok(Self::CtcssEnc),
             _ => Err(()),
         }
     }
@@ -225,9 +293,9 @@ impl TryFrom<char> for Tone {
 impl fmt::Display for Tone {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Tone::Off => write!(f, "OFF"),
-            Tone::EncDec => write!(f, "ENC/DEC"),
-            Tone::Enc => write!(f, "ENC"),
+            Tone::CtcssOff => write!(f, "CTCSS_OFF"),
+            Tone::CtcssEncDec => write!(f, "CTCSS_ENCDEC"),
+            Tone::CtcssEnc => write!(f, "CTCSS_ENC"),
         }
     }
 }
@@ -379,6 +447,12 @@ pub struct CmdId<'a> {
 
 /// Identification
 pub const CMD_ID: CmdId<'static> = CmdId { cmd: Cmd { code: &['I', 'D'], read_params: 4 } };
+pub const FTX1_ID: u16 = 840;
+pub const FTDX5000: u16 = 362;
+pub const FT991A: u16 = 362;
+pub const FTDX101D: u16 = 362;
+pub const FTDX101MP: u16 = 362;
+pub const FTDX10: u16 = 362;
 
 impl CmdId<'_> {
     pub fn read(&self) -> Vec<u8> {
@@ -392,13 +466,7 @@ impl CmdId<'_> {
     }
 
     pub fn validate(&self, id: u16) -> Result<(), ()> {
-        // 0362: FTDX5000
-        // 0670: FT-991A
-        // 0681: FTDX101D
-        // 0682: FTDX101MP
-        // 0761: FTDX10
-        // 0840: FTX-1
-        if id == 840 {
+        if id == FTX1_ID {
             Ok(())
         } else {
             Err(())
@@ -411,15 +479,31 @@ impl CmdId<'_> {
 //------------------------------------
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MemoryRead {
-    channel: MemoryChannel,     // 5 positions [00001]
-    frequency_hz: u32,          // 9 positions [432100000]
-    clarifier_offset_hz: i16,   // 5 positions [+0015]
-    rx_clarifier_enabled: bool, // 1 position [0: OFF, 1: ON]
-    tx_clarifier_enabled: bool, // 1 position [0: OFF, 1: ON]
-    mode: Mode,                 // 1 positions
-    ch_type: ChType, // 1 position [0: VFO 1: Memory Channel 2: Memory Tune 3: Quick Memory Bank (QMB) 4: - 5: PMS]
-    tone: Tone,      // 1 position [0: CTCSS “OFF” 1: CTCSS ENC/DEC 2: CTCSS ENC]
-    shift: Shift,    // 1 position [0: Simplex 1: Plus Shift 2: Minus Shift]
+    pub channel: MemoryChannel,                 // 5 positions [00001]
+    pub frequency_hz: u32,                      // 9 positions [432100000]
+    pub clarifier_offset_hz: i16,               // 5 positions [+0015]
+    pub rx_clarifier_enabled: RxClarifierOnOff, // 1 position [0: OFF, 1: ON]
+    pub tx_clarifier_enabled: TxClarifierOnOff, // 1 position [0: OFF, 1: ON]
+    pub mode: Mode,                             // 1 positions
+    pub ch_type: ChType, // 1 position [0: VFO 1: Memory Channel 2: Memory Tune 3: Quick Memory Bank (QMB) 4: - 5: PMS]
+    pub tone: Tone,      // 1 position [0: CTCSS “OFF” 1: CTCSS ENC/DEC 2: CTCSS ENC]
+    pub shift: Shift,    // 1 position [0: Simplex 1: Plus Shift 2: Minus Shift]
+}
+
+impl Default for MemoryRead {
+    fn default() -> Self {
+        Self {
+            channel: MemoryChannel::VfoMtQmb,
+            frequency_hz: 0,
+            clarifier_offset_hz: 0,
+            rx_clarifier_enabled: RxClarifierOnOff::RxClarifierOff,
+            tx_clarifier_enabled: TxClarifierOnOff::TxClarifierOff,
+            mode: Mode::Lsb,
+            ch_type: ChType::Vfo,
+            tone: Tone::CtcssOff,
+            shift: Shift::Simplex,
+        }
+    }
 }
 
 pub struct CmdMr<'a> {
@@ -437,17 +521,7 @@ impl CmdMr<'_> {
 
     pub fn decode(&self, buffer: &Vec<u8>) -> Result<MemoryRead, ()> {
         // MR00001007000000+000000110000;
-        let mut mr = MemoryRead {
-            channel: MemoryChannel::VfoMtQmb,
-            frequency_hz: 0,
-            clarifier_offset_hz: 0,
-            rx_clarifier_enabled: false,
-            tx_clarifier_enabled: false,
-            mode: Mode::Lsb,
-            ch_type: ChType::Vfo,
-            tone: Tone::Off,
-            shift: Shift::Simplex,
-        };
+        let mut mr = MemoryRead::default();
         Cmd::is_reply_ok(&self.cmd, buffer)?;
         let ch_chars: [char; 5] = [
             buffer[2] as char,
@@ -459,8 +533,8 @@ impl CmdMr<'_> {
         mr.channel = MemoryChannel::try_from(&ch_chars)?;
         mr.frequency_hz = buf9_to_u32(&buffer[7..16])?;
         mr.clarifier_offset_hz = buf4_to_i16(&buffer[16..21])?;
-        mr.rx_clarifier_enabled = buffer[21] == b'1';
-        mr.tx_clarifier_enabled = buffer[22] == b'1';
+        mr.rx_clarifier_enabled = RxClarifierOnOff::try_from(buffer[21] as char)?;
+        mr.tx_clarifier_enabled = TxClarifierOnOff::try_from(buffer[22] as char)?;
         mr.mode = Mode::try_from(buffer[23] as char)?;
         mr.ch_type = ChType::try_from(buffer[24] as char)?;
         mr.tone = Tone::try_from(buffer[25] as char)?;
@@ -483,8 +557,8 @@ impl fmt::Display for MemoryRead {
             self.tone,
             self.shift,
             self.clarifier_offset_hz,
-            if self.rx_clarifier_enabled { "ON" } else { "OFF" },
-            if self.tx_clarifier_enabled { "ON" } else { "OFF" },
+            self.rx_clarifier_enabled,
+            self.tx_clarifier_enabled,
         )
     }
 }
