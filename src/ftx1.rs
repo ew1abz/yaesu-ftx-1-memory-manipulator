@@ -10,6 +10,107 @@ pub mod parsers;
 use parsers::{buf4_to_i16, buf4_to_u16, buf9_to_u32};
 
 //------------------------------------
+// Frequency
+//------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FrequencyHz {
+    value: u32,
+}
+
+impl FrequencyHz {
+    pub fn to_u32(&self) -> u32 {
+        self.value
+    }
+}
+
+impl TryFrom<u32> for FrequencyHz {
+    type Error = ();
+
+    fn try_from(item: u32) -> Result<Self, Self::Error> {
+        // 30kHz - 174MHz, 400MHz - 470MHz
+        if item >= 30_000 && item < 174_000_000 || item >= 400_000_000 && item < 470_000_000 {
+            Ok(FrequencyHz { value: item })
+        } else {
+            Err(())
+        }
+    }
+}
+
+impl TryFrom<&[u8]> for FrequencyHz {
+    type Error = ();
+
+    fn try_from(item: &[u8]) -> Result<Self, Self::Error> {
+        if item.len() != 9 {
+            return Err(());
+        }
+        let value = buf9_to_u32(item)?;
+        FrequencyHz::try_from(value)
+    }
+}
+
+impl TryFrom<String> for FrequencyHz {
+    type Error = ();
+
+    fn try_from(item: String) -> Result<Self, Self::Error> {
+        if item.len() > 9 {
+            return Err(());
+        }
+        FrequencyHz::try_from(item.as_bytes())
+    }
+}
+
+impl fmt::Display for FrequencyHz {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:09}", self.value)
+    }
+}
+
+//------------------------------------
+// Clarifier offset
+//------------------------------------
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ClarifierOffsetHz {
+    value: i16,
+}
+
+impl ClarifierOffsetHz {
+    pub fn to_i16(&self) -> i16 {
+        self.value
+    }
+}
+
+impl TryFrom<i16> for ClarifierOffsetHz {
+    type Error = ();
+
+    fn try_from(item: i16) -> Result<Self, Self::Error> {
+        if item.abs() > 9_990 {
+            Err(())
+        } else {
+            Ok(ClarifierOffsetHz { value: item })
+        }
+    }
+}
+
+impl TryFrom<&[u8]> for ClarifierOffsetHz {
+    type Error = ();
+
+    fn try_from(item: &[u8]) -> Result<Self, Self::Error> {
+        if item.len() != 5 {
+            return Err(());
+        }
+        let value = buf4_to_i16(item)?;
+        ClarifierOffsetHz::try_from(value)
+    }
+}
+
+impl fmt::Display for ClarifierOffsetHz {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:+05}", self.value,)
+    }
+}
+
+//------------------------------------
 // RX Clarifier
 //------------------------------------
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -266,18 +367,19 @@ impl fmt::Display for Shift {
 }
 
 //------------------------------------
-// Tone
+// SqlType
 //------------------------------------
-
-// [0: CTCSS “OFF” 1: CTCSS ENC/DEC 2: CTCSS ENC]
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum Tone {
+pub enum SqlType {
     CtcssOff = 0x00,
     CtcssEncDec = 0x01,
     CtcssEnc = 0x02,
+    Dcs = 0x03,
+    PrFreq = 0x04,
+    RevTone = 0x05,
 }
 
-impl TryFrom<char> for Tone {
+impl TryFrom<char> for SqlType {
     type Error = ();
 
     fn try_from(item: char) -> Result<Self, Self::Error> {
@@ -285,17 +387,23 @@ impl TryFrom<char> for Tone {
             '0' => Ok(Self::CtcssOff),
             '1' => Ok(Self::CtcssEncDec),
             '2' => Ok(Self::CtcssEnc),
+            '3' => Ok(Self::Dcs),
+            '4' => Ok(Self::PrFreq),
+            '5' => Ok(Self::RevTone),
             _ => Err(()),
         }
     }
 }
 
-impl fmt::Display for Tone {
+impl fmt::Display for SqlType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Tone::CtcssOff => write!(f, "CTCSS_OFF"),
-            Tone::CtcssEncDec => write!(f, "CTCSS_ENCDEC"),
-            Tone::CtcssEnc => write!(f, "CTCSS_ENC"),
+            SqlType::CtcssOff => write!(f, "CTCSS_OFF"),
+            SqlType::CtcssEncDec => write!(f, "CTCSS_ENCDEC"),
+            SqlType::CtcssEnc => write!(f, "CTCSS_ENC"),
+            SqlType::Dcs => write!(f, "DCS"),
+            SqlType::PrFreq => write!(f, "PR FREQ"),
+            SqlType::RevTone => write!(f, "REV TONE"),
         }
     }
 }
@@ -480,13 +588,13 @@ impl CmdId<'_> {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MemoryRead {
     pub channel: MemoryChannel,                 // 5 positions [00001]
-    pub frequency_hz: u32,                      // 9 positions [432100000]
-    pub clarifier_offset_hz: i16,               // 5 positions [+0015]
+    pub frequency_hz: FrequencyHz,              // 9 positions [432100000]
+    pub clarifier_offset_hz: ClarifierOffsetHz, // 5 positions [+0015]
     pub rx_clarifier_enabled: RxClarifierOnOff, // 1 position [0: OFF, 1: ON]
     pub tx_clarifier_enabled: TxClarifierOnOff, // 1 position [0: OFF, 1: ON]
     pub mode: Mode,                             // 1 positions
     pub ch_type: ChType, // 1 position [0: VFO 1: Memory Channel 2: Memory Tune 3: Quick Memory Bank (QMB) 4: - 5: PMS]
-    pub tone: Tone,      // 1 position [0: CTCSS “OFF” 1: CTCSS ENC/DEC 2: CTCSS ENC]
+    pub sql_type: SqlType,      // 1 position [0: CTCSS “OFF” 1: CTCSS ENC/DEC 2: CTCSS ENC]
     pub shift: Shift,    // 1 position [0: Simplex 1: Plus Shift 2: Minus Shift]
 }
 
@@ -494,13 +602,13 @@ impl Default for MemoryRead {
     fn default() -> Self {
         Self {
             channel: MemoryChannel::VfoMtQmb,
-            frequency_hz: 0,
-            clarifier_offset_hz: 0,
+            frequency_hz: FrequencyHz { value: 0 },
+            clarifier_offset_hz: ClarifierOffsetHz { value: 0 },
             rx_clarifier_enabled: RxClarifierOnOff::RxClarifierOff,
             tx_clarifier_enabled: TxClarifierOnOff::TxClarifierOff,
             mode: Mode::Lsb,
             ch_type: ChType::Vfo,
-            tone: Tone::CtcssOff,
+            sql_type: SqlType::CtcssOff,
             shift: Shift::Simplex,
         }
     }
@@ -531,13 +639,13 @@ impl CmdMr<'_> {
             buffer[6] as char,
         ];
         mr.channel = MemoryChannel::try_from(&ch_chars)?;
-        mr.frequency_hz = buf9_to_u32(&buffer[7..16])?;
-        mr.clarifier_offset_hz = buf4_to_i16(&buffer[16..21])?;
+        mr.frequency_hz = FrequencyHz::try_from(&buffer[7..16])?;
+        mr.clarifier_offset_hz = ClarifierOffsetHz::try_from(&buffer[16..21])?;
         mr.rx_clarifier_enabled = RxClarifierOnOff::try_from(buffer[21] as char)?;
         mr.tx_clarifier_enabled = TxClarifierOnOff::try_from(buffer[22] as char)?;
         mr.mode = Mode::try_from(buffer[23] as char)?;
         mr.ch_type = ChType::try_from(buffer[24] as char)?;
-        mr.tone = Tone::try_from(buffer[25] as char)?;
+        mr.sql_type = SqlType::try_from(buffer[25] as char)?;
         let _dummy = buffer[26] | buffer[27];
         mr.shift = Shift::try_from(buffer[28] as char)?;
 
@@ -554,7 +662,7 @@ impl fmt::Display for MemoryRead {
             self.ch_type,
             self.frequency_hz,
             self.mode,
-            self.tone,
+            self.sql_type,
             self.shift,
             self.clarifier_offset_hz,
             self.rx_clarifier_enabled,
