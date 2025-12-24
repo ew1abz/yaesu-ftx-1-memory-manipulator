@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 // can use the same implementation. The file `src/parsers.rs` lives next to this file.
 #[path = "parsers.rs"]
 pub mod parsers;
-use parsers::{buf4_to_i16, buf4_to_u16, buf9_to_u32};
+use parsers::{buf3_to_u8, buf4_to_i16, buf4_to_u16, buf9_to_u32};
 
 //------------------------------------
 // Frequency
@@ -751,6 +751,86 @@ impl CmdMc<'_> {
         ];
         let channel = MemoryChannel::try_from(&ch).unwrap();
         Ok(McReply { side, channel })
+    }
+}
+
+//------------------------------------
+// CN CTCSS TONE FREQUENCY / DCS CODE
+//------------------------------------
+pub enum ToneType {
+    Ctcss = 0,
+    Dcs = 1,
+}
+
+impl TryFrom<&u8> for ToneType {
+    type Error = ();
+
+    fn try_from(item: &u8) -> Result<Self, Self::Error> {
+        match item {
+            0 => Ok(ToneType::Ctcss),
+            1 => Ok(ToneType::Dcs),
+            _ => Err(()),
+        }
+    }
+}
+
+type CtcssFreq = f32;
+type DcsCode = u16;
+type ToneCode = u8;
+
+const CTCSS_CODES: [CtcssFreq; 50] = [
+    67.0, 69.3, 71.9, 74.4, 77.0, 79.7, 82.5, 85.4, 88.5,
+    91.5, 94.8, 97.4, 100.0, 103.5, 107.2, 110.9, 114.8, 118.8,
+    123.0, 127.3, 131.8, 136.5, 141.3, 146.2, 151.4, 156.7, 159.8, // 150.0
+    162.2, 165.5, 167.9, 171.3, 173.8, 177.3, 179.9, 183.5, 186.2,
+    189.9, 192.8, 196.6, 199.5, 203.5, 206.5, 210.7, 218.1, 225.7,
+    229.1, 233.6, 241.8, 250.3, 254.1
+];
+
+const DCS_CODES: [DcsCode; 104] = [
+    23, 25, 26, 31, 32, 36, 43, 47, 51, 53, 54, 65, 71, 72, 73,
+    74, 114, 115, 116, 122, 125, 131, 132, 134, 143, 145, 152,
+    155, 156, 162, 165, 172, 174, 205, 212, 223, 225, 226, 243,
+    244, 245, 246, 251, 252, 255, 261, 263, 265, 266, 271, 274,
+    306, 311, 315, 325, 331, 332, 343, 346, 351, 356, 364, 365,
+    371, 411, 412, 413, 423, 431, 432, 445, 446, 452, 454, 455,
+    462, 464, 465, 466, 503, 506, 516, 523, 565, 532, 546, 565,
+    606, 612, 624, 627, 631, 632, 654, 662, 664, 703, 712, 723,
+    731, 732, 734, 743, 754
+];
+
+pub struct CmdCn<'a> {
+    cmd: Cmd<'a>,
+}
+
+pub const CMD_CN: CmdCn<'static> = CmdCn { cmd: Cmd { code: &['C', 'N'], read_params: 5 } };
+
+pub struct CnReply {
+    side: Side,
+    tone_type: ToneType,
+    tone_code: ToneCode,
+}
+
+impl CmdCn<'_> {
+    pub fn read(&self) -> Vec<u8> {
+        Cmd::tx_buffer(&self.cmd, None)
+    }
+
+    pub fn set(&self, sd: Side, tt: ToneType, cd: ToneCode) -> Vec<u8> {
+        let sd = sd as u8 as char;
+        let tt = tt as u8 as char;
+        let s = format!("{}{}{:03}", sd, tt, cd);
+        debug!("CMD_CN::set input: {:?}", s);
+        Cmd::tx_buffer(&self.cmd, Some(s.chars().map(|c| c as char).collect::<Vec<char>>()))
+    }
+
+    pub fn decode(&self, buffer: &Vec<u8>) -> Result<CnReply, ()> {
+        debug!("CMD_CN::decode input: {:?}", buffer);
+        Cmd::is_reply_ok(&self.cmd, buffer)?;
+        let side = Side::try_from(&buffer[2]).unwrap();
+        let tone_type = ToneType::try_from(&buffer[3]).unwrap();
+        let tone_code = buf3_to_u8(&buffer[4..7]).unwrap();
+        Ok(CnReply { side, tone_type, tone_code })
     }
 }
 

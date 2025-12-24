@@ -1,4 +1,19 @@
 /// Small parsing helpers for fixed-width ASCII numeric fields used by the FTX1 protocol.
+pub fn buf3_to_u8(buffer: &[u8]) -> Result<u8, ()> {
+    if buffer.len() != 3 {
+        return Err(());
+    }
+    let mut result: u8 = 0;
+    for (i, item) in buffer.iter().enumerate().take(3) {
+        if let Some(n) = (*item as char).to_digit(10) {
+            result += n as u8 * (10u8.pow(2 - i as u32));
+        } else {
+            return Err(());
+        }
+    }
+    Ok(result)
+}
+
 pub fn buf4_to_u16(buffer: &[u8]) -> Result<u16, ()> {
     if buffer.len() != 4 {
         return Err(());
