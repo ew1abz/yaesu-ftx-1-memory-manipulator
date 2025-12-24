@@ -696,6 +696,68 @@ impl CmdMt<'_> {
     }
 }
 
+//------------------------------------
+// MC - MEMORY CHANNEL
+//------------------------------------
+pub enum Side {
+    Main = 0,
+    Sub = 1,
+}
+
+impl TryFrom<&u8> for Side {
+    type Error = ();
+
+    fn try_from(item: &u8) -> Result<Self, Self::Error> {
+        match item {
+            0 => Ok(Side::Main),
+            1 => Ok(Side::Sub),
+            _ => Err(()),
+        }
+    }
+}
+
+pub struct McReply {
+    pub side: Side,
+    pub channel: MemoryChannel,
+}
+
+pub struct CmdMc<'a> {
+    cmd: Cmd<'a>,
+}
+
+pub const CMD_MC: CmdMc<'static> = CmdMc { cmd: Cmd { code: &['M', 'C'], read_params: 6 } };
+
+impl CmdMc<'_> {
+    pub fn read(&self) -> Vec<u8> {
+        Cmd::tx_buffer(&self.cmd, None)
+    }
+
+    pub fn set(&self, ch: MemoryChannel) -> Vec<u8> {
+        let s = ch.to_chars().unwrap();
+        debug!("CMD_MC::set input: {:?}", s);
+        Cmd::tx_buffer(&self.cmd, Some(s.to_vec()))
+    }
+
+    pub fn decode(&self, buffer: &Vec<u8>) -> Result<McReply, ()> {
+        debug!("CMD_MC::decode input: {:?}", buffer);
+        Cmd::is_reply_ok(&self.cmd, buffer)?;
+        let side = Side::try_from(&buffer[2]).unwrap();
+        let ch: [char; 5] = [
+            buffer[3] as char,
+            buffer[4] as char,
+            buffer[5] as char,
+            buffer[6] as char,
+            buffer[7] as char,
+        ];
+        let channel = MemoryChannel::try_from(&ch).unwrap();
+        Ok(McReply { side, channel })
+    }
+}
+
+//------------------------------------
+// TESTS
+//------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -718,5 +780,96 @@ mod tests {
 
         // Emergency
         assert_eq!(MemoryChannel::EmergencyChannel.to_chars().unwrap(), ['E', 'M', 'G', 'C', 'H']);
+    }
+
+    #[test]
+    fn test_frequency_hz_from_u32_valid() {
+        assert!(FrequencyHz::try_from(30_000).is_ok());
+        assert!(FrequencyHz::try_from(173_999_999).is_ok());
+        assert!(FrequencyHz::try_from(400_000_000).is_ok());
+        assert!(FrequencyHz::try_from(469_999_999).is_ok());
+    }
+
+    #[test]
+    fn test_frequency_hz_from_u32_invalid() {
+        assert!(FrequencyHz::try_from(29_999).is_err());
+        assert!(FrequencyHz::try_from(174_000_000).is_err());
+        assert!(FrequencyHz::try_from(399_999_999).is_err());
+        assert!(FrequencyHz::try_from(470_000_000).is_err());
+    }
+
+    #[test]
+    fn test_frequency_hz_from_bytes_valid() {
+        assert!(FrequencyHz::try_from("007000000".as_bytes()).is_ok());
+        assert_eq!(
+            FrequencyHz::try_from("007000000".as_bytes()).unwrap().value,
+            7_000_000
+        );
+    }
+
+    #[test]
+    fn test_frequency_hz_from_bytes_invalid() {
+        assert!(FrequencyHz::try_from("00700000".as_bytes()).is_err()); // Invalid length
+        assert!(FrequencyHz::try_from("000000001".as_bytes()).is_err()); // Invalid value
+    }
+
+    #[test]
+    fn test_frequency_hz_display() {
+        let freq = FrequencyHz { value: 7_123_456 };
+        assert_eq!(format!("{}", freq), "007123456");
+    }
+
+    #[test]
+    fn test_frequency_hz_from_string_valid() {
+        assert!(FrequencyHz::try_from("007000000".to_string()).is_ok());
+    }
+
+    #[test]
+    fn test_frequency_hz_from_string_invalid() {
+        assert!(FrequencyHz::try_from("0070000000".to_string()).is_err()); // Invalid length
+        assert!(FrequencyHz::try_from("invalid".to_string()).is_err()); // Not a number
+    }
+
+    #[test]
+    fn test_clarifier_offset_hz_from_i16_valid() {
+        assert!(ClarifierOffsetHz::try_from(0).is_ok());
+        assert!(ClarifierOffsetHz::try_from(9990).is_ok());
+        assert!(ClarifierOffsetHz::try_from(-9990).is_ok());
+    }
+
+    #[test]
+    fn test_clarifier_offset_hz_from_i16_invalid() {
+        assert!(ClarifierOffsetHz::try_from(9991).is_err());
+        assert!(ClarifierOffsetHz::try_from(-9991).is_err());
+    }
+
+    #[test]
+    fn test_clarifier_offset_hz_from_bytes_valid() {
+        assert!(ClarifierOffsetHz::try_from("+0000".as_bytes()).is_ok());
+        assert_eq!(
+            ClarifierOffsetHz::try_from("+1234".as_bytes()).unwrap().value,
+            1234
+        );
+        assert_eq!(
+            ClarifierOffsetHz::try_from("-1234".as_bytes()).unwrap().value,
+            -1234
+        );
+    }
+
+    #[test]
+    fn test_clarifier_offset_hz_from_bytes_invalid() {
+        assert!(ClarifierOffsetHz::try_from("+000".as_bytes()).is_err()); // Invalid length
+        assert!(ClarifierOffsetHz::try_from("-99999".as_bytes()).is_err()); // Invalid length
+        assert!(ClarifierOffsetHz::try_from("?1234".as_bytes()).is_err()); // Invalid sign
+    }
+
+    #[test]
+    fn test_clarifier_offset_hz_display() {
+        let offset = ClarifierOffsetHz { value: 123 };
+        assert_eq!(format!("{}", offset), "+0123");
+        let offset = ClarifierOffsetHz { value: -123 };
+        assert_eq!(format!("{}", offset), "-0123");
+        let offset = ClarifierOffsetHz { value: 0 };
+        assert_eq!(format!("{}", offset), "+0000");
     }
 }
