@@ -34,8 +34,12 @@ pub fn buf4_to_i16(buffer: &[u8]) -> Result<i16, ()> {
     if buffer.len() != 5 {
         return Err(());
     }
+    let sign: i16 = match buffer[0] {
+        b'+' => 1,
+        b'-' => -1,
+        _ => return Err(()),
+    };
     let mut result: i16 = 0;
-    let sign: i16 = if buffer[0] == b'-' { -1 } else { 1 };
     for (i, item) in buffer[1..].iter().enumerate().take(4) {
         if let Some(n) = (*item as char).to_digit(10) {
             result += n as i16 * (10i16.pow(3 - i as u32));
@@ -124,6 +128,7 @@ mod tests {
         // function currently expects 5 bytes with the first byte being a sign
         assert_eq!(buf4_to_i16(b"-1234").unwrap(), -1234);
         assert_eq!(buf4_to_i16(b"-9999").unwrap(), -9999);
+        assert!(buf4_to_i16(b"@9999").is_err());
     }
 
     #[test]
