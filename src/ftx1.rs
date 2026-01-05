@@ -716,6 +716,15 @@ impl TryFrom<&u8> for Side {
     }
 }
 
+impl From<Side> for char {
+    fn from(item: Side) -> Self {
+        match item {
+            Side::Main => '0',
+            Side::Sub => '1',
+        }
+    }
+}
+
 pub struct McReply {
     pub side: Side,
     pub channel: MemoryChannel,
@@ -732,10 +741,12 @@ impl CmdMc<'_> {
         Cmd::tx_buffer(&self.cmd, None)
     }
 
-    pub fn set(&self, ch: MemoryChannel) -> Vec<u8> {
-        let s = ch.to_chars().unwrap();
-        debug!("CMD_MC::set input: {:?}", s);
-        Cmd::tx_buffer(&self.cmd, Some(s.to_vec()))
+    pub fn set(&self, side: Side, ch: MemoryChannel) -> Vec<u8> {
+        let mut tx = Vec::<char>::new();
+        tx.push(side.into());
+        tx.extend(ch.to_chars().unwrap().to_vec());
+        debug!("CMD_MC::set input: {:?}", tx);
+        Cmd::tx_buffer(&self.cmd, Some(tx))
     }
 
     pub fn decode(&self, buffer: &Vec<u8>) -> Result<McReply, ()> {
@@ -760,6 +771,15 @@ impl CmdMc<'_> {
 pub enum ToneType {
     Ctcss = 0,
     Dcs = 1,
+}
+
+impl From<ToneType> for char {
+    fn from(item: ToneType) -> Self {
+        match item {
+            ToneType::Ctcss => '0',
+            ToneType::Dcs => '1',
+        }
+    }
 }
 
 impl TryFrom<&u8> for ToneType {
@@ -812,13 +832,17 @@ pub struct CnReply {
 }
 
 impl CmdCn<'_> {
-    pub fn read(&self) -> Vec<u8> {
-        Cmd::tx_buffer(&self.cmd, None)
+    pub fn read(&self, side: Side, tone_type: ToneType) -> Vec<u8> {
+        let mut tx = Vec::<char>::new();
+        tx.push(side.into());
+        tx.push(tone_type.into());
+        debug!("CMD_CN::read input: {:?}", tx);
+        Cmd::tx_buffer(&self.cmd, Some(tx))
     }
 
     pub fn set(&self, sd: Side, tt: ToneType, cd: ToneCode) -> Vec<u8> {
-        let sd = sd as u8 as char;
-        let tt = tt as u8 as char;
+        let sd: char = sd.into();
+        let tt: char = tt.into();
         let s = format!("{}{}{:03}", sd, tt, cd);
         debug!("CMD_CN::set input: {:?}", s);
         Cmd::tx_buffer(&self.cmd, Some(s.chars().map(|c| c as char).collect::<Vec<char>>()))
