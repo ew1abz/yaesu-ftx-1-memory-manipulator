@@ -2,7 +2,7 @@
 authors = ["Vladimir K <ew1abz@gmail.com>"]
 edition = "2021"
 readme = "README.md"
-name = "ftdx-1chm"
+name = "ftx1-mm"
 version = "0.1.0"
 
 [dependencies]

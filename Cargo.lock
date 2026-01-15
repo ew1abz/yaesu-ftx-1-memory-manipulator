@@ -211,7 +211,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ftdx-1chm"
+name = "ftx1-mm"
 version = "0.1.0"
 dependencies = [
  "clap",

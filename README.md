@@ -11,3 +11,13 @@
   * Yaesu FTX-1
 
 This tool is perfect for amateur radio operators who want a simple and efficient way to manage their transceiver's memory.
+
+## Usage
+
+`ftx1-mm --read-radio -p /dev/ttyUSB0`
+
+## Development
+
+Run via Cargo with debug logging enabled:
+
+`RUST_LOG=debug cargo run -- --read-radio -p /dev/ttyUSB0`

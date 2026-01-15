@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use core::fmt;
-use log::debug;
+use log::{trace, debug};
 use serde::{Deserialize, Serialize};
 
 // include parsing helpers from a separate file so both the binary module and the library
@@ -311,6 +311,11 @@ impl MemoryChannel {
             MemoryChannel::EmergencyChannel => Ok(['E', 'M', 'G', 'C', 'H']),
         }
     }
+
+    pub fn to_string(&self) -> Result<String, ()> {
+        let chars = self.to_chars()?;
+        Ok(chars.iter().collect())
+    }
 }
 
 impl fmt::Display for MemoryChannel {
@@ -536,12 +541,12 @@ impl Cmd<'_> {
         if rx_buffer.len() < 3 {
             return Err(());
         }
-        let code0 = rx_buffer.contains(&(self.code[0] as u8));
-        let code1 = rx_buffer.contains(&(self.code[1] as u8));
-        let params = rx_buffer.len() - 3 == self.read_params;
-        let terminator = rx_buffer.contains(&b';');
-        debug!("{} {} {} {} {}", &code0, &code1, &params, rx_buffer.len() - 3, &terminator);
-        (terminator & code0 & code1 & params).then_some(()).ok_or(())
+        let code0_ok = rx_buffer.contains(&(self.code[0] as u8));
+        let code1_ok = rx_buffer.contains(&(self.code[1] as u8));
+        let params_ok = rx_buffer.len() - 3 == self.read_params;
+        let terminator_ok = rx_buffer.contains(&b';');
+        trace!("is_reply_ok: code0:{} code1:{} params:{} terminator:{} len: {}", &code0_ok, &code1_ok, &params_ok, &terminator_ok, rx_buffer.len());
+        (terminator_ok & code0_ok & code1_ok & params_ok).then_some(()).ok_or(())
     }
 }
 
@@ -623,7 +628,6 @@ pub const CMD_MR: CmdMr<'static> = CmdMr { cmd: Cmd { code: &['M', 'R'], read_pa
 impl CmdMr<'_> {
     pub fn read(&self, ch: MemoryChannel) -> Vec<u8> {
         let s = ch.to_chars().unwrap();
-        debug!("DEBUG: CMD_MT::read input: {:?}", s);
         Cmd::tx_buffer(&self.cmd, Some(s.to_vec()))
     }
 
@@ -683,12 +687,10 @@ pub const CMD_MT: CmdMt<'static> = CmdMt { cmd: Cmd { code: &['M', 'T'], read_pa
 impl CmdMt<'_> {
     pub fn read(&self, ch: MemoryChannel) -> Vec<u8> {
         let s = ch.to_chars().unwrap();
-        debug!("CMD_MT::read input: {:?}", s);
         Cmd::tx_buffer(&self.cmd, Some(s.to_vec()))
     }
 
     pub fn decode(&self, buffer: &Vec<u8>) -> Result<String, ()> {
-        debug!("CMD_MT::decode input: {:?}", buffer);
         Cmd::is_reply_ok(&self.cmd, buffer)?;
         let _channel = &buffer[2..6];
         let tag = buffer[7..19].iter().map(|&b| b as char).collect();
@@ -699,18 +701,20 @@ impl CmdMt<'_> {
 //------------------------------------
 // MC - MEMORY CHANNEL
 //------------------------------------
+#[derive(Clone, Debug)]
 pub enum Side {
     Main = 0,
     Sub = 1,
 }
 
-impl TryFrom<&u8> for Side {
+impl TryFrom<char> for Side {
     type Error = ();
 
-    fn try_from(item: &u8) -> Result<Self, Self::Error> {
+    fn try_from(item: char) -> Result<Self, Self::Error> {
+        debug!("DEBUG: Side::try_from input: {:}", item);
         match item {
-            0 => Ok(Side::Main),
-            1 => Ok(Side::Sub),
+            '0' => Ok(Side::Main),
+            '1' => Ok(Side::Sub),
             _ => Err(()),
         }
     }
@@ -745,14 +749,12 @@ impl CmdMc<'_> {
         let mut tx = Vec::<char>::new();
         tx.push(side.into());
         tx.extend(ch.to_chars().unwrap().to_vec());
-        debug!("CMD_MC::set input: {:?}", tx);
         Cmd::tx_buffer(&self.cmd, Some(tx))
     }
 
     pub fn decode(&self, buffer: &Vec<u8>) -> Result<McReply, ()> {
-        debug!("CMD_MC::decode input: {:?}", buffer);
         Cmd::is_reply_ok(&self.cmd, buffer)?;
-        let side = Side::try_from(&buffer[2]).unwrap();
+        let side = Side::try_from(buffer[2] as char)?;
         let ch: [char; 5] = [
             buffer[3] as char,
             buffer[4] as char,
@@ -768,6 +770,7 @@ impl CmdMc<'_> {
 //------------------------------------
 // CN CTCSS TONE FREQUENCY / DCS CODE
 //------------------------------------
+#[derive(Clone, Debug)]
 pub enum ToneType {
     Ctcss = 0,
     Dcs = 1,
@@ -782,21 +785,30 @@ impl From<ToneType> for char {
     }
 }
 
-impl TryFrom<&u8> for ToneType {
+impl From<ToneType> for String {
+    fn from(item: ToneType) -> Self {
+        match item {
+            ToneType::Ctcss => "CTCSS".to_string(),
+            ToneType::Dcs => "DCS".to_string(),
+        }
+    }
+}
+
+impl TryFrom<char> for ToneType {
     type Error = ();
 
-    fn try_from(item: &u8) -> Result<Self, Self::Error> {
+    fn try_from(item: char) -> Result<Self, Self::Error> {
         match item {
-            0 => Ok(ToneType::Ctcss),
-            1 => Ok(ToneType::Dcs),
+            '0' => Ok(ToneType::Ctcss),
+            '1' => Ok(ToneType::Dcs),
             _ => Err(()),
         }
     }
 }
 
-type CtcssFreq = f32;
-type DcsCode = u16;
-type ToneCode = u8;
+pub type CtcssFreq = f32;
+pub type DcsCode = u16;
+pub type ToneCode = u8;
 
 const CTCSS_CODES: [CtcssFreq; 50] = [
     67.0, 69.3, 71.9, 74.4, 77.0, 79.7, 82.5, 85.4, 88.5,
@@ -825,18 +837,48 @@ pub struct CmdCn<'a> {
 
 pub const CMD_CN: CmdCn<'static> = CmdCn { cmd: Cmd { code: &['C', 'N'], read_params: 5 } };
 
+#[derive(Clone)]
 pub struct CnReply {
-    side: Side,
-    tone_type: ToneType,
-    tone_code: ToneCode,
+    pub side: Side,
+    pub tone_type: ToneType,
+    pub tone_code: ToneCode,
 }
+
+
+impl From<CnReply> for String {
+    fn from(item: CnReply) -> Self {
+        let side = match item.side {
+            Side::Main => "MAIN",
+            Side::Sub => "SUB",
+        };
+        let tone_type: String = item.clone().tone_type.into();
+        let tone_code = match item.tone_type {
+            ToneType::Ctcss => CTCSS_CODES[item.tone_code as usize].to_string(),
+            ToneType::Dcs =>  DCS_CODES[item.tone_code as usize].to_string(),
+        };
+        format!("{} {} {}", side, tone_type, tone_code)
+    }
+}
+
+// impl TryFrom<&u8> for CnReply {
+//         let tone_code = item.tone_code;
+//         format!("{} {} {}", side, tone_type, tone_code)
+//     }
+// }
+
+// impl CtcssFreq {
+//     fn to_string(self) -> String {
+//         CTCSS_CODES[self as usize - 1].to_string();
+//         format!("{:.1}", self)
+//     }
+// }
+
 
 impl CmdCn<'_> {
     pub fn read(&self, side: Side, tone_type: ToneType) -> Vec<u8> {
         let mut tx = Vec::<char>::new();
         tx.push(side.into());
         tx.push(tone_type.into());
-        debug!("CMD_CN::read input: {:?}", tx);
         Cmd::tx_buffer(&self.cmd, Some(tx))
     }
 
@@ -844,17 +886,37 @@ impl CmdCn<'_> {
         let sd: char = sd.into();
         let tt: char = tt.into();
         let s = format!("{}{}{:03}", sd, tt, cd);
-        debug!("CMD_CN::set input: {:?}", s);
         Cmd::tx_buffer(&self.cmd, Some(s.chars().map(|c| c as char).collect::<Vec<char>>()))
     }
 
     pub fn decode(&self, buffer: &Vec<u8>) -> Result<CnReply, ()> {
-        debug!("CMD_CN::decode input: {:?}", buffer);
         Cmd::is_reply_ok(&self.cmd, buffer)?;
-        let side = Side::try_from(&buffer[2]).unwrap();
-        let tone_type = ToneType::try_from(&buffer[3]).unwrap();
-        let tone_code = buf3_to_u8(&buffer[4..7]).unwrap();
+        let side = Side::try_from(buffer[2] as char)?;
+        trace!("side: {:?}", side);
+        let tone_type = ToneType::try_from(buffer[3] as char)?;
+        trace!("tone_type: {:?}", tone_type);
+        let tone_code = buf3_to_u8(&buffer[4..7])?;
+        trace!("tone_code: {:?}", tone_code);
         Ok(CnReply { side, tone_type, tone_code })
+    }
+
+    pub fn tone_code_to_string(tone_type: ToneType, tone_code: ToneCode) -> Result<String, ()> {
+        match tone_type {
+            ToneType::Ctcss => {
+                if (tone_code as usize) < CTCSS_CODES.len() {
+                    Ok(format!("{:.1}", CTCSS_CODES[tone_code as usize]))
+                } else {
+                    Err(())
+                }
+            }
+            ToneType::Dcs => {
+                if (tone_code as usize) < DCS_CODES.len() {
+                    Ok(format!("{}", DCS_CODES[tone_code as usize]))
+                } else {
+                    Err(())
+                }
+            }
+        }
     }
 }
 

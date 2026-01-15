@@ -1,10 +1,11 @@
 use clap::Parser;
-use ftdx_1chm::ftx1::MemoryChannel;
+use ftx1::MemoryChannel;
 use indicatif::ProgressBar;
-use log::{debug, error};
+use log::{trace,debug, error};
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::time::Duration;
+use std::iter::zip;
 
 mod ftx1;
 
@@ -72,6 +73,10 @@ struct CsvRecord {
     rx_clarifier_enabled: ftx1::RxClarifierOnOff,
     #[serde(rename = "Tx Clarifier Enabled")]
     tx_clarifier_enabled: ftx1::TxClarifierOnOff,
+    #[serde(rename = "CTCSS Tone")]
+    ctcss_tone: String,
+    #[serde(rename = "DCS Tone")]
+    dcs_tone: String,
 }
 
 fn main() -> Result<(), ()> {
@@ -173,45 +178,81 @@ fn validate_record(record: &CsvRecord) -> Result<(), Vec<String>> {
 }
 
 fn read_radio_data(cli: &Cli) -> Result<(), ()> {
-    println!("Reading from radio...");
-    let mut port = serialport::new(&cli.port, cli.speed)
-        .timeout(Duration::from_millis(200))
-        .open()
-        .expect("Failed to open port");
+    let p = serialport::new(&cli.port, cli.speed)
+    .timeout(Duration::from_millis(200))
+    .open();
 
-    read_validate_id(&mut *port)?;
+    if let Err(e) = p {
+        println!("Failed to open port '{}': {:?}", &cli.port, e);
+        return Err(());
+    }
+
+    let mut port = p.unwrap();
+    if let Err(e) = read_validate_id(&mut *port) {
+        println!("Error validating radio ID: {:?}", e);
+        return Err(());
+    }
+
     let mut wtr = csv::Writer::from_path(&cli.file).unwrap();
-    let bar = ProgressBar::new(CHANNELS as u64);
 
+    // Go through all memory channels
+    println!("Reading memory channels...");
+    let bar = ProgressBar::new(CHANNELS as u64);
+    let mut memory_list: Vec<ftx1::MemoryRead> = Vec::new();
     for ch in 1..=CHANNELS {
         bar.inc(1);
         let mem = read_mem(&mut *port, ch);
-        match mem {
-            Ok(m) => {
-                let tag = read_tag(&mut *port, ch);
-                let csv_record: CsvRecord = CsvRecord {
-                    channel: MemoryChannel::to_chars(&MemoryChannel::Mem(ch))
-                        .unwrap()
-                        .into_iter()
-                        .collect::<String>(),
-                    tag: tag,
-                    freq: m.frequency_hz.to_u32(),
-                    clarifier_offset_hz: m.clarifier_offset_hz.to_i16(),
-                    rx_clarifier_enabled: m.rx_clarifier_enabled,
-                    tx_clarifier_enabled: m.tx_clarifier_enabled,
-                    mode: m.mode.to_string(),
-                    ch_type: m.ch_type,
-                    tone: m.sql_type,
-                    shift: m.shift,
-                };
-                wtr.serialize(&csv_record).unwrap();
-            }
-            Err(_) => (),
+        if let Ok(m) = mem {
+            memory_list.push(m);
         }
     }
     bar.finish();
+
+    println!("Reading memory tags...");
+    let bar = ProgressBar::new(memory_list.len() as u64);
+    let mut tag_list: Vec<Option<String>> = Vec::new();
+    for ch in 1..=memory_list.len() as u16 {
+        bar.inc(1);
+        let tag = read_tag(&mut *port, ch);
+        tag_list.push(tag);
+    }
+    bar.finish();
+
+    println!("Reading tone info...");
+    let bar = ProgressBar::new(memory_list.len() as u64);
+    let mut tone_list: Vec<(ftx1::ToneCode, ftx1::ToneCode)> = Vec::new();
+    for ch in 1..=memory_list.len() as u16 {
+        bar.inc(1);
+        // There is no answer for this command, so we ignore the result
+        let _ = cat_send(&mut *port, &ftx1::CMD_MC.set(ftx1::Side::Sub, ftx1::MemoryChannel::Mem(ch)))?;
+        let ctcss_tone_reply = cat_send(&mut *port, &ftx1::CMD_CN.read(ftx1::Side::Sub, ftx1::ToneType::Ctcss))?;
+        let ctcss_tone_decoded = ftx1::CMD_CN.decode(&ctcss_tone_reply)?;
+        let dcs_tone_reply = cat_send(&mut *port, &ftx1::CMD_CN.read(ftx1::Side::Sub, ftx1::ToneType::Dcs))?;
+        let dcs_tone_decoded = ftx1::CMD_CN.decode(&dcs_tone_reply)?;
+        tone_list.push((ctcss_tone_decoded.tone_code, dcs_tone_decoded.tone_code));
+    }
+
+    // Combine memory data, tags and tones into CSV records
+    for (m, (tag, tone)) in zip(memory_list, zip(tag_list, tone_list)) {
+        let rec = CsvRecord {
+            channel: m.channel.to_string()?,
+            tag: tag,
+            freq: m.frequency_hz.to_u32(),
+            clarifier_offset_hz: m.clarifier_offset_hz.to_i16(),
+            rx_clarifier_enabled: m.rx_clarifier_enabled,
+            tx_clarifier_enabled: m.tx_clarifier_enabled,
+            mode: m.mode.to_string(),
+            ch_type: m.ch_type,
+            tone: m.sql_type,
+            shift: m.shift,
+            ctcss_tone: ftx1::CmdCn::tone_code_to_string(ftx1::ToneType::Ctcss, tone.0)?,
+            dcs_tone: ftx1::CmdCn::tone_code_to_string(ftx1::ToneType::Dcs, tone.1)?,
+        };
+        // println!("{:?}", rec);
+        wtr.serialize(&rec).unwrap();
+    }
     wtr.flush().unwrap();
-    println!("Data saved to {}", cli.file);
+    println!("Memory data saved to CSV file: {}", cli.file);
     Ok(())
 }
 
@@ -242,7 +283,9 @@ fn read_tag(port: &mut dyn serialport::SerialPort, ch: u16) -> Option<String> {
 }
 
 fn cat_send(port: &mut dyn serialport::SerialPort, data: &[u8]) -> Result<Vec<u8>, ()> {
-    port.write(data).expect("failed to write message");
+    port.write_all(data).expect("failed to write message");
+    trace!("Sent: {:?} {:?}", String::from_utf8_lossy(&data), data);
+
     let mut buffer: Vec<u8> = vec![0; RX_BUFFER_SIZE];
     loop {
         match port.read(buffer.as_mut_slice()) {
@@ -251,11 +294,13 @@ fn cat_send(port: &mut dyn serialport::SerialPort, data: &[u8]) -> Result<Vec<u8
                 break;
             }
             Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {
+                buffer.truncate(0);
                 break;
             }
             Err(e) => eprintln!("{:?}", e),
         }
     }
+    trace!("Received: {:?} {:?}", String::from_utf8_lossy(&buffer), buffer);
     Ok(buffer)
 }
 
