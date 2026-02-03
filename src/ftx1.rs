@@ -60,6 +60,12 @@ impl TryFrom<String> for FrequencyHz {
     }
 }
 
+impl From<FrequencyHz> for String {
+    fn from(item: FrequencyHz) -> Self {
+        format!("{:09}", item.value)
+    }
+}
+
 impl fmt::Display for FrequencyHz {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:09}", self.value)
@@ -104,9 +110,15 @@ impl TryFrom<&[u8]> for ClarifierOffsetHz {
     }
 }
 
+impl From<ClarifierOffsetHz> for String {
+    fn from(item: ClarifierOffsetHz) -> Self {
+        format!("{:09}", item.value)
+    }
+}
+
 impl fmt::Display for ClarifierOffsetHz {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:+05}", self.value,)
+        write!(f, "{:+05}", self.value)
     }
 }
 
@@ -144,6 +156,15 @@ impl TryFrom<char> for RxClarifierOnOff {
     }
 }
 
+impl From<RxClarifierOnOff> for char {
+    fn from(item: RxClarifierOnOff) -> Self {
+        match item {
+            RxClarifierOnOff::RxClarifierOff => '0',
+            RxClarifierOnOff::RxClarifierOn => '1',
+        }
+    }
+}
+
 //------------------------------------
 // TX Clarifier
 //------------------------------------
@@ -174,6 +195,15 @@ impl TryFrom<char> for TxClarifierOnOff {
             '0' => Ok(TxClarifierOnOff::TxClarifierOff),
             '1' => Ok(TxClarifierOnOff::TxClarifierOn),
             _ => Err(()),
+        }
+    }
+}
+
+impl From<TxClarifierOnOff> for char {
+    fn from(item: TxClarifierOnOff) -> Self {
+        match item {
+            TxClarifierOnOff::TxClarifierOff => '0',
+            TxClarifierOnOff::TxClarifierOn => '1',
         }
     }
 }
@@ -243,6 +273,19 @@ impl fmt::Display for ChType {
             ChType::Qmb => write!(f, "QMB"),
             ChType::Reserved4 => write!(f, "Reserved"),
             ChType::Pms => write!(f, "PMS"),
+        }
+    }
+}
+
+impl From<ChType> for char {
+    fn from(item: ChType) -> Self {
+        match item {
+            ChType::Vfo => '0',
+            ChType::MemoryChannel => '1',
+            ChType::MemoryTune => '2',
+            ChType::Qmb => '3',
+            ChType::Reserved4 => '4',
+            ChType::Pms => '5',
         }
     }
 }
@@ -371,6 +414,16 @@ impl fmt::Display for Shift {
     }
 }
 
+impl From<Shift> for char {
+    fn from(item: Shift) -> Self {
+        match item {
+            Shift::Simplex => '0',
+            Shift::PlusShift => '1',
+            Shift::MinusShift => '2',
+        }
+    }
+}
+
 //------------------------------------
 // SqlType
 //------------------------------------
@@ -413,6 +466,19 @@ impl fmt::Display for SqlType {
     }
 }
 
+impl From<SqlType> for char {
+    fn from(item: SqlType) -> Self {
+        match item {
+            SqlType::CtcssOff => '0',
+            SqlType::CtcssEncDec => '1',
+            SqlType::CtcssEnc => '2',
+            SqlType::Dcs => '3',
+            SqlType::PrFreq => '4',
+            SqlType::RevTone => '5',
+        }
+    }
+}
+
 //------------------------------------
 // Mode
 //------------------------------------
@@ -436,24 +502,24 @@ pub enum Mode {
     DataFmN = 0x0f,
 }
 
-impl Mode {
-    fn code(&self) -> char {
-        match self {
-            Self::Lsb => '1',
-            Self::Usb => '2',
-            Self::CwU => '3',
-            Self::Fm => '4',
-            Self::Am => '5',
-            Self::RttyL => '6',
-            Self::CwL => '7',
-            Self::DataL => '8',
-            Self::RttyU => '9',
-            Self::DataFm => 'A',
-            Self::FmN => 'B',
-            Self::DataU => 'C',
-            Self::AmN => 'D',
-            Self::Psk => 'E',
-            Self::DataFmN => 'F',
+impl From<Mode> for char {
+    fn from(item: Mode) -> Self {
+        match item {
+            Mode::Lsb => '1',
+            Mode::Usb => '2',
+            Mode::CwU => '3',
+            Mode::Fm => '4',
+            Mode::Am => '5',
+            Mode::RttyL => '6',
+            Mode::CwL => '7',
+            Mode::DataL => '8',
+            Mode::RttyU => '9',
+            Mode::DataFm => 'A',
+            Mode::FmN => 'B',
+            Mode::DataU => 'C',
+            Mode::AmN => 'D',
+            Mode::Psk => 'E',
+            Mode::DataFmN => 'F',
         }
     }
 }
@@ -588,7 +654,7 @@ impl CmdId<'_> {
 }
 
 //------------------------------------
-// CmdMemoryRead
+// MR - MEMORY CHANNEL READ
 //------------------------------------
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MemoryRead {
@@ -764,6 +830,62 @@ impl CmdMc<'_> {
         ];
         let channel = MemoryChannel::try_from(&ch).unwrap();
         Ok(McReply { side, channel })
+    }
+}
+
+//------------------------------------
+// MW - MEMORY CHANNEL WRITE
+//------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryWrite {
+    pub channel: MemoryChannel,                 // 5 positions [00001]
+    pub frequency_hz: FrequencyHz,              // 9 positions [432100000]
+    pub clarifier_offset_hz: ClarifierOffsetHz, // 5 positions [+0015]
+    pub rx_clarifier_enabled: RxClarifierOnOff, // 1 position [0: OFF, 1: ON]
+    pub tx_clarifier_enabled: TxClarifierOnOff, // 1 position [0: OFF, 1: ON]
+    pub mode: Mode,                             // 1 positions
+    pub ch_type: ChType, // 1 position [0: VFO 1: Memory Channel 2: Memory Tune 3: Quick Memory Bank (QMB) 4: - 5: PMS]
+    pub sql_type: SqlType,      // 1 position [0: CTCSS “OFF” 1: CTCSS ENC/DEC 2: CTCSS ENC]
+    pub shift: Shift,    // 1 position [0: Simplex 1: Plus Shift 2: Minus Shift]
+}
+
+impl Default for MemoryWrite {
+    fn default() -> Self {
+        Self {
+            channel: MemoryChannel::VfoMtQmb,
+            frequency_hz: FrequencyHz { value: 0 },
+            clarifier_offset_hz: ClarifierOffsetHz { value: 0 },
+            rx_clarifier_enabled: RxClarifierOnOff::RxClarifierOff,
+            tx_clarifier_enabled: TxClarifierOnOff::TxClarifierOff,
+            mode: Mode::Lsb,
+            ch_type: ChType::Vfo,
+            sql_type: SqlType::CtcssOff,
+            shift: Shift::Simplex,
+        }
+    }
+}
+
+pub struct CmdMw<'a> {
+    cmd: Cmd<'a>,
+}
+
+pub const CMD_MW: CmdMw<'static> = CmdMw { cmd: Cmd { code: &['M', 'W'], read_params: 0 } };
+impl CmdMw<'_> {
+    pub fn set(&self, mw: MemoryWrite) ->  Result<Vec<u8>, ()> {
+        let mut buffer = Vec::<char>::new();
+        buffer.append(mw.channel.to_chars().unwrap().to_vec().as_mut());
+        let frequency_hz: String = mw.frequency_hz.into();
+        buffer.append(frequency_hz.chars().collect::<Vec<char>>().as_mut());
+        let clarifier_offset_hz: String = mw.clarifier_offset_hz.into();
+        buffer.append(clarifier_offset_hz.chars().collect::<Vec<char>>().as_mut());
+        buffer.append(&mut vec![mw.rx_clarifier_enabled.into()]);
+        buffer.append(&mut vec![mw.tx_clarifier_enabled.into()]);
+        buffer.append(&mut vec![mw.mode.into()]);
+        buffer.append(&mut vec![mw.ch_type.into()]);
+        buffer.append(&mut vec![mw.sql_type.into()]);
+        buffer.append(&mut vec![mw.shift.into()]);
+        Ok(Cmd::tx_buffer(&self.cmd, Some(buffer)))
     }
 }
 
