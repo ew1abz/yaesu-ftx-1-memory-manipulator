@@ -1,13 +1,13 @@
 use clap::Parser;
-use ftx1::MemoryChannel;
 use indicatif::ProgressBar;
-use log::{trace,debug, error};
+use log::{debug, error, trace};
 use serde::{Deserialize, Serialize};
 use std::io;
-use std::time::Duration;
 use std::iter::zip;
+use std::time::Duration;
 
 mod ftx1;
+use ftx1::*;
 
 const RX_BUFFER_SIZE: usize = 255;
 const CHANNELS: u16 = 100;
@@ -51,32 +51,52 @@ struct Cli {
     check_data: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 struct CsvRecord {
     #[serde(rename = "Channel Number")]
     channel: String,
     #[serde(rename = "Frequency (Hz)")]
-    freq: u32, // ftx1::FrequencyHz,
+    freq: u32, // FrequencyHz,
     #[serde(rename = "Memory Tag")]
     tag: Option<String>,
     #[serde(rename = "Mode")]
     mode: String,
     #[serde(rename = "Channel Type")]
-    ch_type: ftx1::ChType,
+    ch_type: ChType,
     #[serde(rename = "Squelch Type")]
-    tone: ftx1::SqlType,
+    tone: SqlType,
     #[serde(rename = "Shift (Hz)")]
-    shift: ftx1::Shift,
+    shift: Shift,
     #[serde(rename = "Clarifier Offset (Hz)")]
     clarifier_offset_hz: i16,
     #[serde(rename = "Rx Clarifier Enabled")]
-    rx_clarifier_enabled: ftx1::RxClarifierOnOff,
+    rx_clarifier_enabled: RxClarifierOnOff,
     #[serde(rename = "Tx Clarifier Enabled")]
-    tx_clarifier_enabled: ftx1::TxClarifierOnOff,
+    tx_clarifier_enabled: TxClarifierOnOff,
     #[serde(rename = "CTCSS Tone")]
     ctcss_tone: String,
     #[serde(rename = "DCS Tone")]
     dcs_tone: String,
+}
+
+impl TryFrom<CsvRecord> for MemoryReadWrite {
+    type Error = ();
+
+    fn try_from(item: CsvRecord) -> Result<Self, Self::Error> {
+        let channel = MemoryChannel::try_from(item.channel)?;
+        let mem = MemoryReadWrite {
+            channel: channel,
+            frequency_hz: FrequencyHz::try_from(item.freq)?,
+            clarifier_offset_hz: ClarifierOffsetHz::try_from(item.clarifier_offset_hz)?,
+            rx_clarifier_enabled: item.rx_clarifier_enabled,
+            tx_clarifier_enabled: item.tx_clarifier_enabled,
+            mode: Mode::try_from(item.mode)?,
+            ch_type: item.ch_type,
+            sql_type: item.tone,
+            shift: item.shift,
+        };
+        Ok(mem)
+    }
 }
 
 fn main() -> Result<(), ()> {
@@ -86,7 +106,8 @@ fn main() -> Result<(), ()> {
     if cli.read_radio {
         read_radio_data(&cli)?;
     } else if cli.write_radio {
-        println!("Writing to radio is not implemented yet.");
+        write_radio_data(&cli)?;
+        // println!("Writing to radio is not implemented yet.");
     } else if cli.check_data {
         check_data(&cli.file)?;
     } else {
@@ -149,23 +170,42 @@ fn validate_record(record: &CsvRecord) -> Result<(), Vec<String>> {
     } else {
         let chars: Vec<char> = record.channel.chars().collect();
         let ch_array: [char; 5] = [chars[0], chars[1], chars[2], chars[3], chars[4]];
-        if ftx1::MemoryChannel::try_from(&ch_array).is_err() {
+        if MemoryChannel::try_from(&ch_array).is_err() {
             errors.push(format!("Channel '{}' is not a valid memory channel.", record.channel));
         }
     }
 
     // Validate frequency
-    if ftx1::FrequencyHz::try_from(record.freq).is_err() {
+    if FrequencyHz::try_from(record.freq).is_err() {
         errors.push(format!("Frequency '{}' is not valid.", record.freq));
     }
 
     // Validate clarifier offset: 0000 - 9990 (Hz)
-    if ftx1::ClarifierOffsetHz::try_from(record.clarifier_offset_hz).is_err() {
-        errors.push(format!("Clarifier offset '{}' is not a valid number.", record.clarifier_offset_hz));
+    if ClarifierOffsetHz::try_from(record.clarifier_offset_hz).is_err() {
+        errors.push(format!(
+            "Clarifier offset '{}' is not a valid number.",
+            record.clarifier_offset_hz
+        ));
     }
 
     // Validate mode
-    const VALID_MODES: &[&str] = &["LSB", "USB", "CW-U", "FM", "AM", "RTTY-L", "CW-L", "DATA-L", "RTTY-U", "DATA-FM", "FM-N", "DATA-U", "AM-N", "PSK", "DATA-FM-N"];
+    const VALID_MODES: &[&str] = &[
+        "LSB",
+        "USB",
+        "CW-U",
+        "FM",
+        "AM",
+        "RTTY-L",
+        "CW-L",
+        "DATA-L",
+        "RTTY-U",
+        "DATA-FM",
+        "FM-N",
+        "DATA-U",
+        "AM-N",
+        "PSK",
+        "DATA-FM-N",
+    ];
     if !VALID_MODES.contains(&record.mode.as_str()) {
         errors.push(format!("Mode '{}' is not a valid mode.", record.mode));
     }
@@ -178,27 +218,13 @@ fn validate_record(record: &CsvRecord) -> Result<(), Vec<String>> {
 }
 
 fn read_radio_data(cli: &Cli) -> Result<(), ()> {
-    let p = serialport::new(&cli.port, cli.speed)
-    .timeout(Duration::from_millis(200))
-    .open();
-
-    if let Err(e) = p {
-        println!("Failed to open port '{}': {:?}", &cli.port, e);
-        return Err(());
-    }
-
-    let mut port = p.unwrap();
-    if let Err(e) = read_validate_id(&mut *port) {
-        println!("Error validating radio ID: {:?}", e);
-        return Err(());
-    }
-
-    let mut wtr = csv::Writer::from_path(&cli.file).unwrap();
+    let mut port = open_radio(&cli.port, cli.speed)?;
+    let mut wtr = csv::Writer::from_path(&cli.file).map_err(|_| ())?;
 
     // Go through all memory channels
     println!("Reading memory channels...");
     let bar = ProgressBar::new(CHANNELS as u64);
-    let mut memory_list: Vec<ftx1::MemoryRead> = Vec::new();
+    let mut memory_list: Vec<MemoryReadWrite> = Vec::new();
     for ch in 1..=CHANNELS {
         bar.inc(1);
         let mem = read_mem(&mut *port, ch);
@@ -220,15 +246,15 @@ fn read_radio_data(cli: &Cli) -> Result<(), ()> {
 
     println!("Reading tone info...");
     let bar = ProgressBar::new(memory_list.len() as u64);
-    let mut tone_list: Vec<(ftx1::ToneCode, ftx1::ToneCode)> = Vec::new();
+    let mut tone_list: Vec<(ToneCode, ToneCode)> = Vec::new();
     for ch in 1..=memory_list.len() as u16 {
         bar.inc(1);
         // There is no answer for this command, so we ignore the result
-        let _ = cat_send(&mut *port, &ftx1::CMD_MC.set(ftx1::Side::Sub, ftx1::MemoryChannel::Mem(ch)))?;
-        let ctcss_tone_reply = cat_send(&mut *port, &ftx1::CMD_CN.read(ftx1::Side::Sub, ftx1::ToneType::Ctcss))?;
-        let ctcss_tone_decoded = ftx1::CMD_CN.decode(&ctcss_tone_reply)?;
-        let dcs_tone_reply = cat_send(&mut *port, &ftx1::CMD_CN.read(ftx1::Side::Sub, ftx1::ToneType::Dcs))?;
-        let dcs_tone_decoded = ftx1::CMD_CN.decode(&dcs_tone_reply)?;
+        let _ = cat_send(&mut *port, &CMD_MC.set(Side::Sub, MemoryChannel::Mem(ch)))?;
+        let ctcss_tone_reply = cat_send(&mut *port, &CMD_CN.read(Side::Sub, ToneType::Ctcss))?;
+        let ctcss_tone_decoded = CMD_CN.decode(&ctcss_tone_reply)?;
+        let dcs_tone_reply = cat_send(&mut *port, &CMD_CN.read(Side::Sub, ToneType::Dcs))?;
+        let dcs_tone_decoded = CMD_CN.decode(&dcs_tone_reply)?;
         tone_list.push((ctcss_tone_decoded.tone_code, dcs_tone_decoded.tone_code));
     }
 
@@ -245,8 +271,8 @@ fn read_radio_data(cli: &Cli) -> Result<(), ()> {
             ch_type: m.ch_type,
             tone: m.sql_type,
             shift: m.shift,
-            ctcss_tone: ftx1::CmdCn::tone_code_to_string(ftx1::ToneType::Ctcss, tone.0)?,
-            dcs_tone: ftx1::CmdCn::tone_code_to_string(ftx1::ToneType::Dcs, tone.1)?,
+            ctcss_tone: CmdCn::tone_code_to_string(ToneType::Ctcss, tone.0)?,
+            dcs_tone: CmdCn::tone_code_to_string(ToneType::Dcs, tone.1)?,
         };
         // println!("{:?}", rec);
         wtr.serialize(&rec).unwrap();
@@ -257,24 +283,24 @@ fn read_radio_data(cli: &Cli) -> Result<(), ()> {
 }
 
 fn read_validate_id(port: &mut dyn serialport::SerialPort) -> Result<(), ()> {
-    let rx = cat_send(port, &ftx1::CMD_ID.read())?;
-    let id = ftx1::CMD_ID.decode(&rx)?;
-    match ftx1::CMD_ID.validate(id) {
+    let rx = cat_send(port, &CMD_ID.read())?;
+    let id = CMD_ID.decode(&rx)?;
+    match CMD_ID.validate(id) {
         Ok(_) => println!("Yaesu FTX-1 found (radio ID: {:04})", &id),
         Err(e) => println!("Can't connect to Yaesu FTX-1: {:?}", e),
     }
     Ok(())
 }
 
-fn read_mem(port: &mut dyn serialport::SerialPort, ch: u16) -> Result<ftx1::MemoryRead, ()> {
-    let rx = cat_send(port, &ftx1::CMD_MR.read(ftx1::MemoryChannel::Mem(ch)))?;
-    ftx1::CMD_MR.decode(&rx)
+fn read_mem(port: &mut dyn serialport::SerialPort, ch: u16) -> Result<MemoryReadWrite, ()> {
+    let rx = cat_send(port, &CMD_MR.read(MemoryChannel::Mem(ch)))?;
+    CMD_MR.decode(&rx)
 }
 
 fn read_tag(port: &mut dyn serialport::SerialPort, ch: u16) -> Option<String> {
     debug!("Reading tag for channel: {:?}", ch);
-    let rx = cat_send(port, &ftx1::CMD_MT.read(ftx1::MemoryChannel::Mem(ch))).unwrap();
-    let d = ftx1::CMD_MT.decode(&rx);
+    let rx = cat_send(port, &CMD_MT.read(MemoryChannel::Mem(ch))).unwrap();
+    let d = CMD_MT.decode(&rx);
     match &d {
         Ok(tag) => debug!("Tag: {:}", &tag),
         Err(e) => error!("Error: {:?}", e),
@@ -304,25 +330,43 @@ fn cat_send(port: &mut dyn serialport::SerialPort, data: &[u8]) -> Result<Vec<u8
     Ok(buffer)
 }
 
-// fn print_buffer(header: &str, v: Option<&Vec<u8>>) {
-//     print!("\n{}: ", header);
-//     match v {
-//         Some(data) => {
-//             // Print hex
-//             for x in data {
-//                 print!("{:02X} ", x);
-//             }
-//             print!("| ");
-//             // Print ASCII
-//             for &x in data {
-//                 if x >= 32 && x < 127 {
-//                     print!("{}", x as char);
-//                 } else {
-//                     print!(".");
-//                 }
-//             }
-//         }
-//         None => print!("[]"),
-//     }
-//     print!("\n");
-// }
+fn open_radio(port_name: &String, port_peed: u32) -> Result<Box<dyn serialport::SerialPort>, ()> {
+    match serialport::new(port_name, port_peed).timeout(Duration::from_millis(200)).open() {
+        Ok(mut port) => {
+            if let Err(e) = read_validate_id(&mut *port) {
+                println!("Error validating radio ID: {:?}", e);
+                return Err(());
+            }
+            Ok(port)
+        }
+
+        Err(e) => {
+            println!("Failed to open port '{}': {:?}", port_name, e);
+            return Err(());
+        }
+    }
+}
+
+fn write_radio_data(cli: &Cli) -> Result<(), ()> {
+    let mut port = open_radio(&cli.port, cli.speed)?;
+
+    let mut rdr = csv::Reader::from_path(&cli.file).map_err(|_| ())?;
+    let records: Vec<CsvRecord> = rdr.deserialize::<CsvRecord>().filter_map(|r| r.ok()).collect();
+    println!("Writing memory data from CSV file: {} ({} records)... ", cli.file, records.len());
+    let bar = ProgressBar::new(records.len() as u64);
+    for rec in records {
+        bar.inc(1);
+        let mem = MemoryReadWrite::try_from(rec.clone())?;
+        debug!("Writing memory data for channel: {:?}", mem);
+        let _ = cat_send(&mut *port, &CMD_MW.set(mem.clone())?)?;
+        if let Some(tag) = rec.tag {
+            debug!("Writing tag for channel: {:?}, tag: {:?}", mem.channel, tag);
+            let _ = cat_send(&mut *port, &CMD_MT.set(mem.channel, tag)?)?;
+        }
+        // TODO: write tone data via CMD_CN
+    }
+    bar.finish();
+    println!("Memory data written to radio.");
+
+    Ok(())
+}
