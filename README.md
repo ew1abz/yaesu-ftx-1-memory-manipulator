@@ -21,3 +21,9 @@ This tool is perfect for amateur radio operators who want a simple and efficient
 Run via Cargo with debug logging enabled:
 
 `RUST_LOG=debug cargo run -- --read-radio -p /dev/ttyUSB0`
+
+## TODO
+
+* Print table
+* Add animated GIF to the readme file
+* Write data to the radio
