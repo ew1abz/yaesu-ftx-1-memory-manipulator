@@ -2,3 +2,4 @@
 /logs
 **/*.rs.bk
 *.csv
+doc/*.pdf
