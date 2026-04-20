@@ -146,6 +146,33 @@ fn mutually_exclusive_actions() {
 }
 
 // ---------------------------------------------------------------------------
+// Group 2b: --print (no radio required)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn print_valid_file() {
+    let out = bin()
+        .args(["--print", "--file", fixture("valid.csv").to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("145.000 MHz"));
+    assert!(stdout.contains("HOME"));
+    assert!(stdout.contains("433.500 MHz"));
+    assert!(stdout.contains("REPEATER"));
+}
+
+#[test]
+fn print_missing_file() {
+    let out = bin()
+        .args(["--print", "--file", "nonexistent.csv"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+}
+
+// ---------------------------------------------------------------------------
 // Group 3: --read-radio (real radio required)
 // ---------------------------------------------------------------------------
 

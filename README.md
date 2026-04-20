@@ -8,6 +8,7 @@ as CSV files, making them easy to edit in any spreadsheet application.
 
 - Read all memory channels from the radio to a CSV file
 - Edit channels in any spreadsheet software and write them back
+- Print channels as a formatted table
 - Validate a CSV file without connecting to the radio
 - Supported radio: Yaesu FTX-1
 
@@ -28,6 +29,9 @@ ftx1-mm --write-radio --port /dev/ttyUSB0 --file channels.csv
 
 # Validate a CSV file without touching the radio
 ftx1-mm --check-data --file channels.csv
+
+# Print channels as a table
+ftx1-mm --print --file channels.csv
 ```
 
 Default port: `/dev/ttyUSB0`. Default speed: 38400 baud. Run `ftx1-mm --help`

@@ -80,5 +80,6 @@ archives.
 
 ## TODO
 
-- Print memory channels as a formatted table
+- Simplify "--read-radio" command: make "--file" optional. Use default file name with date and time encoded.
+- Rearrange fields in table output
 - Add animated GIF to README

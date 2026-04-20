@@ -1,4 +1,5 @@
 use clap::Parser;
+use comfy_table::{Cell, Table};
 use indicatif::ProgressBar;
 use log::{debug, error, trace};
 use serde::{Deserialize, Serialize};
@@ -49,6 +50,10 @@ struct Cli {
     /// Check data in the file
     #[arg(long, group = "action")]
     check_data: bool,
+
+    /// Print memory channels from file as a table
+    #[arg(long, group = "action")]
+    print: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -107,9 +112,10 @@ fn main() -> Result<(), ()> {
         read_radio_data(&cli)?;
     } else if cli.write_radio {
         write_radio_data(&cli)?;
-        // println!("Writing to radio is not implemented yet.");
     } else if cli.check_data {
         check_data(&cli.file)?;
+    } else if cli.print {
+        print_table(&cli.file)?;
     } else {
         println!("No action specified. Use --help for options.");
     }
@@ -215,6 +221,33 @@ fn validate_record(record: &CsvRecord) -> Result<(), Vec<String>> {
     } else {
         Err(errors)
     }
+}
+
+fn print_table(file_path: &str) -> Result<(), ()> {
+    let mut rdr = csv::Reader::from_path(file_path).map_err(|_| ())?;
+    let mut table = Table::new();
+    table.set_header(vec![
+        "Ch", "Frequency", "Tag", "Mode", "Type", "Squelch", "Shift (Hz)", "Clar (Hz)", "RX Clar", "TX Clar", "CTCSS", "DCS",
+    ]);
+    for result in rdr.deserialize::<CsvRecord>() {
+        let r = result.map_err(|_| ())?;
+        table.add_row(vec![
+            Cell::new(&r.channel),
+            Cell::new(format!("{:.3} MHz", r.freq as f64 / 1_000_000.0)),
+            Cell::new(r.tag.as_deref().unwrap_or("")),
+            Cell::new(&r.mode),
+            Cell::new(r.ch_type.to_string()),
+            Cell::new(r.tone.to_string()),
+            Cell::new(r.shift.to_string()),
+            Cell::new(r.clarifier_offset_hz),
+            Cell::new(r.rx_clarifier_enabled.to_string()),
+            Cell::new(r.tx_clarifier_enabled.to_string()),
+            Cell::new(&r.ctcss_tone),
+            Cell::new(&r.dcs_tone),
+        ]);
+    }
+    println!("{table}");
+    Ok(())
 }
 
 fn read_radio_data(cli: &Cli) -> Result<(), ()> {
