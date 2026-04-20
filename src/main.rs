@@ -154,11 +154,11 @@ fn check_data(file_path: &str) -> Result<(), ()> {
 
     if invalid_records == 0 {
         println!("\nData looks good!");
+        Ok(())
     } else {
         println!("\nData has issues and may not be processable.");
+        Err(())
     }
-
-    Ok(())
 }
 
 fn validate_record(record: &CsvRecord) -> Result<(), Vec<String>> {
