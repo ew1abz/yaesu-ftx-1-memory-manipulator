@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys,json; f=json.load(sys.stdin).get('tool_input',{}).get('file_path',''); print(f)\" | { read -r f; if [[ \"$f\" == *.md ]]; then markdownlint \"$f\"; fi; }",
+            "statusMessage": "Linting markdown..."
+          }
+        ]
+      }
+    ]
+  }
+}

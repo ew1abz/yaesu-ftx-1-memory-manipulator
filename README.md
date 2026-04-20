@@ -1,29 +1,34 @@
 # Yaesu FTX-1 Memory Manipulator
 
-`yaesu-ftx-1-memory-manipulator` is a cross-platform command-line utility written in Rust to interact with the memory system of modern Yaesu amateur radio transceiver. It provides an easy way to back up, restore, and manage your radio's memory channels from your computer.
+A cross-platform command-line utility for backing up, restoring, and managing
+memory channels on Yaesu FTX-1 amateur radio transceivers. Channels are stored
+as CSV files, making them easy to edit in any spreadsheet application.
 
 ## Features
 
-* **Read & Write:** Download memory channels from your radio to a file and upload them back.
-* **`CSV Import/Export`:** Easily edit your memory channels in any spreadsheet software by exporting them to a CSV file and importing them back.
-* **Cross-Platform:** Runs on Windows, macOS, and Linux.
-* **Supported Radios:**
-  * Yaesu FTX-1
+- Read all memory channels from the radio to a CSV file
+- Edit channels in any spreadsheet software and write them back
+- Validate a CSV file without connecting to the radio
+- Supported radio: Yaesu FTX-1
 
-This tool is perfect for amateur radio operators who want a simple and efficient way to manage their transceiver's memory.
+## Installation
+
+```bash
+cargo install --path .
+```
 
 ## Usage
 
-`ftx1-mm --read-radio -p /dev/ttyUSB0`
+```bash
+# Read memory channels from radio to CSV
+ftx1-mm --read-radio --port /dev/ttyUSB0 --file channels.csv
 
-## Development
+# Edit channels.csv in your spreadsheet app, then write back
+ftx1-mm --write-radio --port /dev/ttyUSB0 --file channels.csv
 
-Run via Cargo with debug logging enabled:
+# Validate a CSV file without touching the radio
+ftx1-mm --check-data --file channels.csv
+```
 
-`RUST_LOG=debug cargo run -- --read-radio -p /dev/ttyUSB0`
-
-## TODO
-
-* Print table
-* Add animated GIF to the readme file
-* Write data to the radio
+Default port: `/dev/ttyUSB0`. Default speed: 38400 baud. Run `ftx1-mm --help`
+for all options.

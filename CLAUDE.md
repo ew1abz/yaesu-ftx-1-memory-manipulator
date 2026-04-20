@@ -17,13 +17,14 @@ cargo run -- --help
 ```
 
 Run a single test by name:
+
 ```bash
 cargo test test_name
 ```
 
 ## Architecture
 
-```
+```text
 src/
 ├── main.rs     - CLI (clap), serial port management, CSV I/O, 3 top-level ops
 ├── ftx1.rs     - CAT protocol: commands, packet codecs, all domain types
