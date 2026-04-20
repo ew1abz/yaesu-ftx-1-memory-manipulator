@@ -10,8 +10,11 @@ cargo clippy
 ## Running
 
 ```bash
-# Read memory channels from radio to CSV
+# Read memory channels from radio to CSV (auto-named ftx1_YYYYMMDD_HHMMSS.csv)
 cargo run -- --read-radio -p /dev/ttyUSB0
+
+# Read to a specific file
+cargo run -- --read-radio -p /dev/ttyUSB0 --file channels.csv
 
 # Write memory channels from CSV to radio
 cargo run -- --write-radio -p /dev/ttyUSB0 --file input.csv
@@ -80,6 +83,5 @@ archives.
 
 ## TODO
 
-- Simplify "--read-radio" command: make "--file" optional. Use default file name with date and time encoded.
 - Rearrange fields in table output
 - Add animated GIF to README

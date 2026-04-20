@@ -198,6 +198,36 @@ fn read_radio_produces_csv() {
 
 #[test]
 #[ignore = "requires physical radio on RADIO_PORT"]
+fn read_radio_default_filename() {
+    // Run in a temp dir so the generated file is easy to find and clean up
+    let tmp = std::env::temp_dir();
+    let out = bin()
+        .args(["--read-radio", "--port", &radio_port()])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "binary failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // stdout says "Memory data saved to CSV file: ftx1_YYYYMMDD_HHMMSS.csv"
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let fname = stdout
+        .lines()
+        .find(|l| l.contains("Memory data saved"))
+        .and_then(|l| l.split(": ").nth(1))
+        .expect("expected 'Memory data saved to CSV file:' line in output");
+    let generated = tmp.join(fname.trim());
+    assert!(generated.exists(), "generated file not found: {:?}", generated);
+    let content = std::fs::read_to_string(&generated).unwrap();
+    assert!(content.contains("Channel Number"), "CSV header missing");
+    let _ = std::fs::remove_file(&generated);
+}
+
+#[test]
+#[ignore = "requires physical radio on RADIO_PORT"]
 fn read_radio_csv_passes_check_data() {
     let out_file = temp_csv("read_check");
     let read_status = bin()
@@ -217,15 +247,13 @@ fn read_radio_csv_passes_check_data() {
 #[test]
 #[ignore = "requires physical radio on RADIO_PORT"]
 fn read_radio_wrong_port() {
-    let out_file = temp_csv("read_bad_port");
     let out = bin()
-        .args(["--read-radio", "--port", "/dev/nonexistent", "--file", out_file.to_str().unwrap()])
+        .args(["--read-radio", "--port", "/dev/nonexistent"])
         .output()
         .unwrap();
     assert!(!out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("Failed to open port"));
-    let _ = std::fs::remove_file(&out_file);
 }
 
 // ---------------------------------------------------------------------------

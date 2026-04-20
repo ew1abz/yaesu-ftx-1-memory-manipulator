@@ -6,7 +6,7 @@ use log::{debug, error, trace};
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::iter::zip;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod ftx1;
 use ftx1::*;
@@ -36,9 +36,9 @@ struct Cli {
     #[arg(short, long, default_value_t = 38_400)]
     speed: u32,
 
-    /// File to save/read memory data
-    #[arg(short, long, default_value = "output.csv")]
-    file: String,
+    /// File to save/read memory data (default for --read-radio: ftx1_YYYYMMDD_HHMMSS.csv)
+    #[arg(short, long)]
+    file: Option<String>,
 
     /// Read from radio
     #[arg(long, group = "action")]
@@ -113,6 +113,48 @@ impl TryFrom<CsvRecord> for MemoryReadWrite {
     }
 }
 
+fn default_filename() -> String {
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let (y, mo, d, h, mi, s) = secs_to_datetime(secs);
+    format!("ftx1_{:04}{:02}{:02}_{:02}{:02}{:02}.csv", y, mo, d, h, mi, s)
+}
+
+fn secs_to_datetime(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
+    let s = secs % 60;
+    let mins = secs / 60;
+    let mi = mins % 60;
+    let hours = mins / 60;
+    let h = hours % 24;
+    let days = hours / 24;
+    // Days since 1970-01-01
+    let (y, mo, d) = days_to_ymd(days);
+    (y, mo, d, h, mi, s)
+}
+
+fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
+    let mut year = 1970u64;
+    loop {
+        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let days_in_year = if leap { 366 } else { 365 };
+        if days < days_in_year { break; }
+        days -= days_in_year;
+        year += 1;
+    }
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days_in_month = [31u64, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut month = 1u64;
+    for dim in &days_in_month {
+        if days < *dim { break; }
+        days -= dim;
+        month += 1;
+    }
+    (year, month, days + 1)
+}
+
+fn require_file(file: &Option<String>, flag: &str) -> Result<String, ()> {
+    file.clone().ok_or_else(|| println!("Error: --file is required for {}", flag))
+}
+
 fn main() -> Result<(), ()> {
     let cli = Cli::parse();
     env_logger::init();
@@ -120,11 +162,14 @@ fn main() -> Result<(), ()> {
     if cli.read_radio {
         read_radio_data(&cli)?;
     } else if cli.write_radio {
-        write_radio_data(&cli)?;
+        let file = require_file(&cli.file, "--write-radio")?;
+        write_radio_data(&cli, &file)?;
     } else if cli.check_data {
-        check_data(&cli.file, cli.quiet)?;
+        let file = require_file(&cli.file, "--check-data")?;
+        check_data(&file, cli.quiet)?;
     } else if cli.print {
-        print_table(&cli.file, cli.plain, cli.quiet)?;
+        let file = require_file(&cli.file, "--print")?;
+        print_table(&file, cli.plain, cli.quiet)?;
     } else {
         println!("No action specified. Use --help for options.");
     }
@@ -301,8 +346,9 @@ fn print_table(file_path: &str, plain: bool, quiet: bool) -> Result<(), ()> {
 
 fn read_radio_data(cli: &Cli) -> Result<(), ()> {
     let quiet = cli.quiet;
+    let file = cli.file.clone().unwrap_or_else(default_filename);
     let mut port = open_radio(&cli.port, cli.speed, quiet)?;
-    let mut wtr = csv::Writer::from_path(&cli.file).map_err(|_| ())?;
+    let mut wtr = csv::Writer::from_path(&file).map_err(|_| ())?;
 
     if !quiet { println!("Reading memory channels..."); }
     let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(CHANNELS as u64) };
@@ -360,8 +406,8 @@ fn read_radio_data(cli: &Cli) -> Result<(), ()> {
         wtr.serialize(&rec).unwrap();
     }
     wtr.flush().unwrap();
-    if !quiet { println!("Memory data saved to CSV file: {}", cli.file); }
-    print_table(&cli.file, cli.plain, quiet)
+    if !quiet { println!("Memory data saved to CSV file: {}", file); }
+    print_table(&file, cli.plain, quiet)
 }
 
 fn read_validate_id(port: &mut dyn serialport::SerialPort, quiet: bool) -> Result<(), ()> {
@@ -428,13 +474,13 @@ fn open_radio(port_name: &String, port_peed: u32, quiet: bool) -> Result<Box<dyn
     }
 }
 
-fn write_radio_data(cli: &Cli) -> Result<(), ()> {
+fn write_radio_data(cli: &Cli, file: &str) -> Result<(), ()> {
     let quiet = cli.quiet;
     let mut port = open_radio(&cli.port, cli.speed, quiet)?;
 
-    let mut rdr = csv::Reader::from_path(&cli.file).map_err(|_| ())?;
+    let mut rdr = csv::Reader::from_path(file).map_err(|_| ())?;
     let records: Vec<CsvRecord> = rdr.deserialize::<CsvRecord>().filter_map(|r| r.ok()).collect();
-    if !quiet { println!("Writing memory data from CSV file: {} ({} records)... ", cli.file, records.len()); }
+    if !quiet { println!("Writing memory data from CSV file: {} ({} records)... ", file, records.len()); }
     let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(records.len() as u64) };
     for rec in records {
         bar.inc(1);

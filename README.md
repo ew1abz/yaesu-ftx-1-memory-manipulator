@@ -21,7 +21,10 @@ cargo install --path .
 ## Usage
 
 ```bash
-# Read memory channels from radio to CSV
+# Read memory channels from radio to CSV (auto-named ftx1_YYYYMMDD_HHMMSS.csv)
+ftx1-mm --read-radio --port /dev/ttyUSB0
+
+# Read to a specific file
 ftx1-mm --read-radio --port /dev/ttyUSB0 --file channels.csv
 
 # Edit channels.csv in your spreadsheet app, then write back
