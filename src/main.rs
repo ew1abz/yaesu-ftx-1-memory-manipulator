@@ -1,5 +1,6 @@
 use clap::Parser;
-use comfy_table::{Cell, Table};
+use comfy_table::presets::{ASCII_FULL_CONDENSED, UTF8_FULL_CONDENSED};
+use comfy_table::{Attribute, Cell, Color, ContentArrangement, Table};
 use indicatif::ProgressBar;
 use log::{debug, error, trace};
 use serde::{Deserialize, Serialize};
@@ -54,6 +55,14 @@ struct Cli {
     /// Print memory channels from file as a table
     #[arg(long, group = "action")]
     print: bool,
+
+    /// Use plain ASCII table style without colors
+    #[arg(long)]
+    plain: bool,
+
+    /// Suppress all output (progress bars, status messages, table)
+    #[arg(short, long)]
+    quiet: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -113,9 +122,9 @@ fn main() -> Result<(), ()> {
     } else if cli.write_radio {
         write_radio_data(&cli)?;
     } else if cli.check_data {
-        check_data(&cli.file)?;
+        check_data(&cli.file, cli.quiet)?;
     } else if cli.print {
-        print_table(&cli.file)?;
+        print_table(&cli.file, cli.plain, cli.quiet)?;
     } else {
         println!("No action specified. Use --help for options.");
     }
@@ -123,8 +132,7 @@ fn main() -> Result<(), ()> {
     Ok(())
 }
 
-fn check_data(file_path: &str) -> Result<(), ()> {
-    println!("Checking data in file: {}", file_path);
+fn check_data(file_path: &str, quiet: bool) -> Result<(), ()> {
     let mut rdr = csv::Reader::from_path(file_path).unwrap();
     let mut valid_records = 0;
     let mut invalid_records = 0;
@@ -133,7 +141,7 @@ fn check_data(file_path: &str) -> Result<(), ()> {
         let record: CsvRecord = match result {
             Ok(r) => r,
             Err(e) => {
-                println!("Error deserializing record {}: {}", i + 1, e);
+                if !quiet { println!("Error deserializing record {}: {}", i + 1, e); }
                 invalid_records += 1;
                 continue;
             }
@@ -145,24 +153,28 @@ fn check_data(file_path: &str) -> Result<(), ()> {
             }
             Err(errors) => {
                 invalid_records += 1;
-                println!("Record {} is invalid:", i + 1);
-                for error in errors {
-                    println!("  - {}", error);
+                if !quiet {
+                    println!("Record {} is invalid:", i + 1);
+                    for error in errors {
+                        println!("  - {}", error);
+                    }
                 }
             }
         }
     }
 
-    println!("\n----- Validation Summary -----");
-    println!("Total records processed: {}", valid_records + invalid_records);
-    println!("Valid records: {}", valid_records);
-    println!("Invalid records: {}", invalid_records);
+    if !quiet {
+        println!("\n----- Validation Summary -----");
+        println!("Total records processed: {}", valid_records + invalid_records);
+        println!("Valid records: {}", valid_records);
+        println!("Invalid records: {}", invalid_records);
+    }
 
     if invalid_records == 0 {
-        println!("\nData looks good!");
+        if !quiet { println!("\nData looks good!"); }
         Ok(())
     } else {
-        println!("\nData has issues and may not be processable.");
+        if !quiet { println!("\nData has issues and may not be processable."); }
         Err(())
     }
 }
@@ -223,27 +235,64 @@ fn validate_record(record: &CsvRecord) -> Result<(), Vec<String>> {
     }
 }
 
-fn print_table(file_path: &str) -> Result<(), ()> {
+fn print_table(file_path: &str, plain: bool, quiet: bool) -> Result<(), ()> {
+    if quiet { return Ok(()); }
     let mut rdr = csv::Reader::from_path(file_path).map_err(|_| ())?;
     let mut table = Table::new();
-    table.set_header(vec![
-        "Ch", "Frequency", "Tag", "Mode", "Type", "Squelch", "Shift (Hz)", "Clar (Hz)", "RX Clar", "TX Clar", "CTCSS", "DCS",
-    ]);
+
+    if plain {
+        table.load_preset(ASCII_FULL_CONDENSED);
+    } else {
+        table
+            .load_preset(UTF8_FULL_CONDENSED)
+            .set_content_arrangement(ContentArrangement::Dynamic);
+    }
+
+    let headers = ["Ch", "Frequency", "Tag", "Mode", "Type", "Squelch", "Shift", "Clar (Hz)", "RX Clar", "TX Clar", "CTCSS", "DCS"];
+    table.set_header(headers.iter().map(|h| {
+        if plain {
+            Cell::new(h)
+        } else {
+            Cell::new(h)
+                .add_attribute(Attribute::Bold)
+                .fg(Color::Cyan)
+        }
+    }));
+
     for result in rdr.deserialize::<CsvRecord>() {
         let r = result.map_err(|_| ())?;
+        let freq = format!("{:.3} MHz", r.freq as f64 / 1_000_000.0);
+        let tag = r.tag.as_deref().unwrap_or("").to_string();
+        let squelch = r.tone.to_string();
+
+        let squelch_color = match r.tone {
+            SqlType::CtcssOff => Color::DarkGrey,
+            SqlType::CtcssEnc => Color::Yellow,
+            SqlType::CtcssEncDec => Color::Green,
+            SqlType::Dcs => Color::Magenta,
+            _ => Color::White,
+        };
+
+        let rx_clar_on = r.rx_clarifier_enabled == RxClarifierOnOff::RxClarifierOn;
+        let tx_clar_on = r.tx_clarifier_enabled == TxClarifierOnOff::TxClarifierOn;
+
+        let make = |s: String, color: Color| -> Cell {
+            if plain { Cell::new(s) } else { Cell::new(s).fg(color) }
+        };
+
         table.add_row(vec![
-            Cell::new(&r.channel),
-            Cell::new(format!("{:.3} MHz", r.freq as f64 / 1_000_000.0)),
-            Cell::new(r.tag.as_deref().unwrap_or("")),
-            Cell::new(&r.mode),
-            Cell::new(r.ch_type.to_string()),
-            Cell::new(r.tone.to_string()),
-            Cell::new(r.shift.to_string()),
-            Cell::new(r.clarifier_offset_hz),
-            Cell::new(r.rx_clarifier_enabled.to_string()),
-            Cell::new(r.tx_clarifier_enabled.to_string()),
-            Cell::new(&r.ctcss_tone),
-            Cell::new(&r.dcs_tone),
+            make(r.channel,                                                          Color::White),
+            make(freq,                                                               Color::Green),
+            make(tag,                                                                Color::White),
+            make(r.mode,                                                             Color::Yellow),
+            make(r.ch_type.to_string(),                                              Color::DarkGrey),
+            make(squelch,                                                            squelch_color),
+            make(r.shift.to_string(),                                                Color::DarkGrey),
+            make(r.clarifier_offset_hz.to_string(),                                  Color::DarkGrey),
+            make(r.rx_clarifier_enabled.to_string(), if rx_clar_on { Color::Green } else { Color::DarkGrey }),
+            make(r.tx_clarifier_enabled.to_string(), if tx_clar_on { Color::Green } else { Color::DarkGrey }),
+            make(r.ctcss_tone,                                                       Color::DarkGrey),
+            make(r.dcs_tone,                                                         Color::DarkGrey),
         ]);
     }
     println!("{table}");
@@ -251,12 +300,12 @@ fn print_table(file_path: &str) -> Result<(), ()> {
 }
 
 fn read_radio_data(cli: &Cli) -> Result<(), ()> {
-    let mut port = open_radio(&cli.port, cli.speed)?;
+    let quiet = cli.quiet;
+    let mut port = open_radio(&cli.port, cli.speed, quiet)?;
     let mut wtr = csv::Writer::from_path(&cli.file).map_err(|_| ())?;
 
-    // Go through all memory channels
-    println!("Reading memory channels...");
-    let bar = ProgressBar::new(CHANNELS as u64);
+    if !quiet { println!("Reading memory channels..."); }
+    let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(CHANNELS as u64) };
     let mut memory_list: Vec<MemoryReadWrite> = Vec::new();
     for ch in 1..=CHANNELS {
         bar.inc(1);
@@ -267,8 +316,8 @@ fn read_radio_data(cli: &Cli) -> Result<(), ()> {
     }
     bar.finish();
 
-    println!("Reading memory tags...");
-    let bar = ProgressBar::new(memory_list.len() as u64);
+    if !quiet { println!("Reading memory tags..."); }
+    let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(memory_list.len() as u64) };
     let mut tag_list: Vec<Option<String>> = Vec::new();
     for ch in 1..=memory_list.len() as u16 {
         bar.inc(1);
@@ -277,8 +326,8 @@ fn read_radio_data(cli: &Cli) -> Result<(), ()> {
     }
     bar.finish();
 
-    println!("Reading tone info...");
-    let bar = ProgressBar::new(memory_list.len() as u64);
+    if !quiet { println!("Reading tone info..."); }
+    let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(memory_list.len() as u64) };
     let mut tone_list: Vec<(ToneCode, ToneCode)> = Vec::new();
     for ch in 1..=memory_list.len() as u16 {
         bar.inc(1);
@@ -311,16 +360,16 @@ fn read_radio_data(cli: &Cli) -> Result<(), ()> {
         wtr.serialize(&rec).unwrap();
     }
     wtr.flush().unwrap();
-    println!("Memory data saved to CSV file: {}", cli.file);
-    Ok(())
+    if !quiet { println!("Memory data saved to CSV file: {}", cli.file); }
+    print_table(&cli.file, cli.plain, quiet)
 }
 
-fn read_validate_id(port: &mut dyn serialport::SerialPort) -> Result<(), ()> {
+fn read_validate_id(port: &mut dyn serialport::SerialPort, quiet: bool) -> Result<(), ()> {
     let rx = cat_send(port, &CMD_ID.read())?;
     let id = CMD_ID.decode(&rx)?;
     match CMD_ID.validate(id) {
-        Ok(_) => println!("Yaesu FTX-1 found (radio ID: {:04})", &id),
-        Err(e) => println!("Can't connect to Yaesu FTX-1: {:?}", e),
+        Ok(_) => { if !quiet { println!("Yaesu FTX-1 found (radio ID: {:04})", &id); } }
+        Err(e) => { if !quiet { println!("Can't connect to Yaesu FTX-1: {:?}", e); } }
     }
     Ok(())
 }
@@ -363,30 +412,30 @@ fn cat_send(port: &mut dyn serialport::SerialPort, data: &[u8]) -> Result<Vec<u8
     Ok(buffer)
 }
 
-fn open_radio(port_name: &String, port_peed: u32) -> Result<Box<dyn serialport::SerialPort>, ()> {
+fn open_radio(port_name: &String, port_peed: u32, quiet: bool) -> Result<Box<dyn serialport::SerialPort>, ()> {
     match serialport::new(port_name, port_peed).timeout(Duration::from_millis(200)).open() {
         Ok(mut port) => {
-            if let Err(e) = read_validate_id(&mut *port) {
-                println!("Error validating radio ID: {:?}", e);
+            if let Err(e) = read_validate_id(&mut *port, quiet) {
+                if !quiet { println!("Error validating radio ID: {:?}", e); }
                 return Err(());
             }
             Ok(port)
         }
-
         Err(e) => {
-            println!("Failed to open port '{}': {:?}", port_name, e);
+            if !quiet { println!("Failed to open port '{}': {:?}", port_name, e); }
             return Err(());
         }
     }
 }
 
 fn write_radio_data(cli: &Cli) -> Result<(), ()> {
-    let mut port = open_radio(&cli.port, cli.speed)?;
+    let quiet = cli.quiet;
+    let mut port = open_radio(&cli.port, cli.speed, quiet)?;
 
     let mut rdr = csv::Reader::from_path(&cli.file).map_err(|_| ())?;
     let records: Vec<CsvRecord> = rdr.deserialize::<CsvRecord>().filter_map(|r| r.ok()).collect();
-    println!("Writing memory data from CSV file: {} ({} records)... ", cli.file, records.len());
-    let bar = ProgressBar::new(records.len() as u64);
+    if !quiet { println!("Writing memory data from CSV file: {} ({} records)... ", cli.file, records.len()); }
+    let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(records.len() as u64) };
     for rec in records {
         bar.inc(1);
         let mem = MemoryReadWrite::try_from(rec.clone())?;
@@ -399,7 +448,7 @@ fn write_radio_data(cli: &Cli) -> Result<(), ()> {
         // TODO: write tone data via CMD_CN
     }
     bar.finish();
-    println!("Memory data written to radio.");
+    if !quiet { println!("Memory data written to radio."); }
 
     Ok(())
 }
