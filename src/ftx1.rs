@@ -863,8 +863,8 @@ pub struct CmdMc<'a> {
 pub const CMD_MC: CmdMc<'static> = CmdMc { cmd: Cmd { code: &['M', 'C'], read_params: 6 } };
 
 impl CmdMc<'_> {
-    pub fn read(&self) -> Vec<u8> {
-        Cmd::tx_buffer(&self.cmd, None)
+    pub fn read(&self, side: Side) -> Vec<u8> {
+        Cmd::tx_buffer(&self.cmd, Some(vec![side.into()]))
     }
 
     pub fn set(&self, side: Side, ch: MemoryChannel) -> Vec<u8> {
