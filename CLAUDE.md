@@ -51,7 +51,7 @@ Key commands: `CMD_ID` (validate radio, ID=840), `CMD_MR` (read 27-byte memory),
 - `MemoryChannel` — 5-char channel ID (e.g. `"00001"`, `"P-01L"`, `"EMGCH"`)
 - `FrequencyHz` — validated 30 kHz–174 MHz or 400–470 MHz
 - `ClarifierOffsetHz` — –9990 to +9990 Hz
-- `Mode` — 16 variants (LSB, USB, FM, AM, CW, RTTY, PSK, DATA variants)
+- `Mode` — 17 variants (LSB, USB, FM, AM, CW, RTTY, PSK, DATA variants, C4FM-DN, C4FM-VW)
 - `SqlType` — CTCSS OFF/ENC/ENC-DEC, DCS, PR FREQ, REV TONE
 - `Shift` — Simplex/Plus/Minus
 
@@ -63,4 +63,4 @@ Columns: Channel Number, Frequency (Hz), Memory Tag, Mode, Channel Type, Squelch
 
 ### Tests
 
-Unit tests live inline in `src/ftx1.rs` and `src/parsers.rs`. The `tests/` directory is currently empty.
+Unit tests live inline in `src/ftx1.rs` and `src/parsers.rs`. Integration tests are in `tests/integration.rs`; most require a physical radio and are `#[ignore]`d by default.

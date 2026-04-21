@@ -29,7 +29,7 @@ impl TryFrom<u32> for FrequencyHz {
 
     fn try_from(item: u32) -> Result<Self, Self::Error> {
         // 30kHz - 174MHz, 400MHz - 470MHz
-        if item >= 30_000 && item < 174_000_000 || item >= 400_000_000 && item < 470_000_000 {
+        if (30_000..174_000_000).contains(&item) || (400_000_000..470_000_000).contains(&item) {
             Ok(FrequencyHz { value: item })
         } else {
             Err(())
@@ -514,6 +514,8 @@ pub enum Mode {
     AmN = 0x0d,
     Psk = 0x0e,
     DataFmN = 0x0f,
+    C4fmDn = 0x11,
+    C4fmVw = 0x12,
 }
 
 impl From<Mode> for char {
@@ -534,6 +536,8 @@ impl From<Mode> for char {
             Mode::AmN => 'D',
             Mode::Psk => 'E',
             Mode::DataFmN => 'F',
+            Mode::C4fmDn => 'H',
+            Mode::C4fmVw => 'I',
         }
     }
 }
@@ -558,6 +562,8 @@ impl TryFrom<char> for Mode {
             'D' => Ok(Self::AmN),
             'E' => Ok(Self::Psk),
             'F' => Ok(Self::DataFmN),
+            'H' => Ok(Self::C4fmDn),
+            'I' => Ok(Self::C4fmVw),
             _ => Err(()),
         }
     }
@@ -589,6 +595,8 @@ impl fmt::Display for Mode {
             Mode::AmN => write!(f, "AM-N"),
             Mode::Psk => write!(f, "PSK"),
             Mode::DataFmN => write!(f, "DATA-FM-N"),
+            Mode::C4fmDn => write!(f, "C4FM-DN"),
+            Mode::C4fmVw => write!(f, "C4FM-VW"),
         }
     }
 }
@@ -613,6 +621,8 @@ impl TryFrom<String> for Mode {
             "AM-N" => Ok(Self::AmN),
             "PSK" => Ok(Self::Psk),
             "DATA-FM-N" => Ok(Self::DataFmN),
+            "C4FM-DN" => Ok(Self::C4fmDn),
+            "C4FM-VW" => Ok(Self::C4fmVw),
             _ => Err(()),
         }
     }
@@ -642,7 +652,7 @@ impl Cmd<'_> {
 
     /// Validate received packet from a transceiver.
     /// Returns Ok() if the answer is valid, Error() otherwise.
-    fn is_reply_ok(&self, rx_buffer: &Vec<u8>) -> Result<(), CmdError> {
+    fn is_reply_ok(&self, rx_buffer: &[u8]) -> Result<(), CmdError> {
         if rx_buffer.len() < 3 {
             return Err(());
         }
@@ -684,7 +694,7 @@ impl CmdId<'_> {
         Cmd::tx_buffer(&self.cmd, None)
     }
 
-    pub fn decode(&self, buffer: &Vec<u8>) -> Result<u16, ()> {
+    pub fn decode(&self, buffer: &[u8]) -> Result<u16, ()> {
         Cmd::is_reply_ok(&self.cmd, buffer)?;
         let id = buf4_to_u16(&buffer[2..6])?;
         Ok(id)
@@ -743,7 +753,7 @@ impl CmdMr<'_> {
         Cmd::tx_buffer(&self.cmd, Some(s.to_vec()))
     }
 
-    pub fn decode(&self, buffer: &Vec<u8>) -> Result<MemoryReadWrite, ()> {
+    pub fn decode(&self, buffer: &[u8]) -> Result<MemoryReadWrite, ()> {
         // MR00001007000000+000000110000;
         let mut mr = MemoryReadWrite::default();
         Cmd::is_reply_ok(&self.cmd, buffer)?;
@@ -802,7 +812,7 @@ impl CmdMt<'_> {
         Cmd::tx_buffer(&self.cmd, Some(s.to_vec()))
     }
 
-    pub fn decode(&self, buffer: &Vec<u8>) -> Result<String, ()> {
+    pub fn decode(&self, buffer: &[u8]) -> Result<String, ()> {
         Cmd::is_reply_ok(&self.cmd, buffer)?;
         let _channel = &buffer[2..6];
         let tag = buffer[7..19].iter().map(|&b| b as char).collect();
@@ -874,7 +884,7 @@ impl CmdMc<'_> {
         Cmd::tx_buffer(&self.cmd, Some(tx))
     }
 
-    pub fn decode(&self, buffer: &Vec<u8>) -> Result<McReply, ()> {
+    pub fn decode(&self, buffer: &[u8]) -> Result<McReply, ()> {
         Cmd::is_reply_ok(&self.cmd, buffer)?;
         let side = Side::try_from(buffer[2] as char)?;
         let ch: [char; 5] = [
@@ -1049,9 +1059,7 @@ impl From<CnReply> for String {
 
 impl CmdCn<'_> {
     pub fn read(&self, side: Side, tone_type: ToneType) -> Vec<u8> {
-        let mut tx = Vec::<char>::new();
-        tx.push(side.into());
-        tx.push(tone_type.into());
+        let tx = vec![side.into(), tone_type.into()];
         Cmd::tx_buffer(&self.cmd, Some(tx))
     }
 
@@ -1059,10 +1067,10 @@ impl CmdCn<'_> {
         let sd: char = sd.into();
         let tt: char = tt.into();
         let s = format!("{}{}{:03}", sd, tt, cd);
-        Cmd::tx_buffer(&self.cmd, Some(s.chars().map(|c| c as char).collect::<Vec<char>>()))
+        Cmd::tx_buffer(&self.cmd, Some(s.chars().collect::<Vec<char>>()))
     }
 
-    pub fn decode(&self, buffer: &Vec<u8>) -> Result<CnReply, ()> {
+    pub fn decode(&self, buffer: &[u8]) -> Result<CnReply, ()> {
         Cmd::is_reply_ok(&self.cmd, buffer)?;
         let side = Side::try_from(buffer[2] as char)?;
         trace!("side: {:?}", side);
@@ -1246,6 +1254,18 @@ mod tests {
         assert!(ClarifierOffsetHz::try_from("+000".as_bytes()).is_err()); // Invalid length
         assert!(ClarifierOffsetHz::try_from("-99999".as_bytes()).is_err()); // Invalid length
         assert!(ClarifierOffsetHz::try_from("?1234".as_bytes()).is_err()); // Invalid sign
+    }
+
+    #[test]
+    fn test_mode_c4fm_roundtrip() {
+        assert_eq!(char::from(Mode::C4fmDn), 'H');
+        assert_eq!(char::from(Mode::C4fmVw), 'I');
+        assert_eq!(Mode::try_from('H'), Ok(Mode::C4fmDn));
+        assert_eq!(Mode::try_from('I'), Ok(Mode::C4fmVw));
+        assert_eq!(Mode::try_from("C4FM-DN".to_string()), Ok(Mode::C4fmDn));
+        assert_eq!(Mode::try_from("C4FM-VW".to_string()), Ok(Mode::C4fmVw));
+        assert_eq!(format!("{}", Mode::C4fmDn), "C4FM-DN");
+        assert_eq!(format!("{}", Mode::C4fmVw), "C4FM-VW");
     }
 
     #[test]

@@ -14,6 +14,17 @@ as CSV files, making them easy to edit in any spreadsheet application.
 
 ## Installation
 
+**Download a pre-built binary** from the [Releases](https://github.com/ew1abz/yaesu-ftx-1-memory-manipulator/releases) page.
+Available for:
+
+- Linux x86\_64 and ARM64 (`.tar.gz`)
+- macOS Intel and Apple Silicon (`.tar.gz`)
+- Windows x86\_64 (`.zip`)
+
+Extract and place `ftx1-mm` (or `ftx1-mm.exe`) somewhere on your `PATH`.
+
+**Or build from source** with Rust:
+
 ```bash
 cargo install --path .
 ```

@@ -99,7 +99,7 @@ impl TryFrom<CsvRecord> for MemoryReadWrite {
     fn try_from(item: CsvRecord) -> Result<Self, Self::Error> {
         let channel = MemoryChannel::try_from(item.channel)?;
         let mem = MemoryReadWrite {
-            channel: channel,
+            channel,
             frequency_hz: FrequencyHz::try_from(item.freq)?,
             clarifier_offset_hz: ClarifierOffsetHz::try_from(item.clarifier_offset_hz)?,
             rx_clarifier_enabled: item.rx_clarifier_enabled,
@@ -134,13 +134,13 @@ fn secs_to_datetime(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
 fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
     let mut year = 1970u64;
     loop {
-        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
         let days_in_year = if leap { 366 } else { 365 };
         if days < days_in_year { break; }
         days -= days_in_year;
         year += 1;
     }
-    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
     let days_in_month = [31u64, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     let mut month = 1u64;
     for dim in &days_in_month {
@@ -178,7 +178,9 @@ fn main() -> Result<(), ()> {
 }
 
 fn check_data(file_path: &str, quiet: bool) -> Result<(), ()> {
-    let mut rdr = csv::Reader::from_path(file_path).unwrap();
+    let mut rdr = csv::Reader::from_path(file_path).map_err(|e| {
+        if !quiet { println!("Error opening file '{}': {}", file_path, e); }
+    })?;
     let mut valid_records = 0;
     let mut invalid_records = 0;
 
@@ -390,7 +392,7 @@ fn read_radio_data(cli: &Cli) -> Result<(), ()> {
     for (m, (tag, tone)) in zip(memory_list, zip(tag_list, tone_list)) {
         let rec = CsvRecord {
             channel: m.channel.to_string()?,
-            tag: tag,
+            tag,
             freq: m.frequency_hz.to_u32(),
             clarifier_offset_hz: m.clarifier_offset_hz.to_i16(),
             rx_clarifier_enabled: m.rx_clarifier_enabled,
@@ -427,7 +429,7 @@ fn read_mem(port: &mut dyn serialport::SerialPort, ch: u16) -> Result<MemoryRead
 
 fn read_tag(port: &mut dyn serialport::SerialPort, ch: u16) -> Option<String> {
     debug!("Reading tag for channel: {:?}", ch);
-    let rx = cat_send(port, &CMD_MT.read(MemoryChannel::Mem(ch))).unwrap();
+    let rx = cat_send(port, &CMD_MT.read(MemoryChannel::Mem(ch))).ok()?;
     let d = CMD_MT.decode(&rx);
     match &d {
         Ok(tag) => debug!("Tag: {:}", &tag),
@@ -437,8 +439,8 @@ fn read_tag(port: &mut dyn serialport::SerialPort, ch: u16) -> Option<String> {
 }
 
 fn cat_send(port: &mut dyn serialport::SerialPort, data: &[u8]) -> Result<Vec<u8>, ()> {
-    port.write_all(data).expect("failed to write message");
-    trace!("Sent: {:?} {:?}", String::from_utf8_lossy(&data), data);
+    port.write_all(data).map_err(|_| ())?;
+    trace!("Sent: {:?} {:?}", String::from_utf8_lossy(data), data);
 
     let mut buffer: Vec<u8> = vec![0; RX_BUFFER_SIZE];
     loop {
@@ -469,7 +471,7 @@ fn open_radio(port_name: &String, port_peed: u32, quiet: bool) -> Result<Box<dyn
         }
         Err(e) => {
             if !quiet { println!("Failed to open port '{}': {:?}", port_name, e); }
-            return Err(());
+            Err(())
         }
     }
 }
