@@ -673,6 +673,139 @@ impl Cmd<'_> {
 }
 
 //------------------------------------
+// VM - VFO/MEMORY MODE
+//------------------------------------
+pub enum VmMode {
+    Vfo,
+    Mt,
+    Memory,
+    Pms,
+    PmsEdge,
+    BandMemory5Mhz,
+    Emg,
+}
+
+impl From<VmMode> for &'static str {
+    fn from(item: VmMode) -> Self {
+        match item {
+            VmMode::Vfo          => "00",
+            VmMode::Mt           => "10",
+            VmMode::Memory       => "11",
+            VmMode::Pms          => "20",
+            VmMode::PmsEdge      => "21",
+            VmMode::BandMemory5Mhz => "51",
+            VmMode::Emg          => "91",
+        }
+    }
+}
+
+pub struct CmdVm<'a> {
+    cmd: Cmd<'a>,
+}
+
+pub const CMD_VM: CmdVm<'static> = CmdVm { cmd: Cmd { code: &['V', 'M'], read_params: 0 } };
+
+impl CmdVm<'_> {
+    pub fn set(&self, side: Side, mode: VmMode) -> Vec<u8> {
+        let side: char = side.into();
+        let mode: &str = mode.into();
+        let s: Vec<char> = format!("{}{}", side, mode).chars().collect();
+        Cmd::tx_buffer(&self.cmd, Some(s))
+    }
+}
+
+//------------------------------------
+// FA - VFO-A FREQUENCY
+//------------------------------------
+pub struct CmdFa<'a> {
+    cmd: Cmd<'a>,
+}
+
+pub const CMD_FA: CmdFa<'static> = CmdFa { cmd: Cmd { code: &['F', 'A'], read_params: 0 } };
+
+impl CmdFa<'_> {
+    pub fn set(&self, freq: FrequencyHz) -> Vec<u8> {
+        let s: String = freq.into();
+        Cmd::tx_buffer(&self.cmd, Some(s.chars().collect()))
+    }
+}
+
+//------------------------------------
+// AM - MAIN-SIDE TO MEMORY CHANNEL
+//------------------------------------
+pub struct CmdAm<'a> {
+    cmd: Cmd<'a>,
+}
+
+pub const CMD_AM: CmdAm<'static> = CmdAm { cmd: Cmd { code: &['A', 'M'], read_params: 0 } };
+
+impl CmdAm<'_> {
+    pub fn save(&self) -> Vec<u8> {
+        Cmd::tx_buffer(&self.cmd, None)
+    }
+}
+
+//------------------------------------
+// MD - OPERATING MODE
+//------------------------------------
+pub struct CmdMd<'a> {
+    cmd: Cmd<'a>,
+}
+
+pub const CMD_MD: CmdMd<'static> = CmdMd { cmd: Cmd { code: &['M', 'D'], read_params: 0 } };
+
+impl CmdMd<'_> {
+    pub fn set(&self, side: Side, mode: Mode) -> Vec<u8> {
+        let side: char = side.into();
+        let mode: char = mode.into();
+        Cmd::tx_buffer(&self.cmd, Some(vec![side, mode]))
+    }
+}
+
+//------------------------------------
+// OS - OFFSET (REPEATER SHIFT)
+//------------------------------------
+pub struct CmdOs<'a> {
+    cmd: Cmd<'a>,
+}
+
+pub const CMD_OS: CmdOs<'static> = CmdOs { cmd: Cmd { code: &['O', 'S'], read_params: 0 } };
+
+impl CmdOs<'_> {
+    pub fn set(&self, side: Side, shift: Shift) -> Vec<u8> {
+        let side: char = side.into();
+        let shift: char = shift.into();
+        Cmd::tx_buffer(&self.cmd, Some(vec![side, shift]))
+    }
+}
+
+//------------------------------------
+// CT - SQL TYPE
+//------------------------------------
+pub struct CmdCt<'a> {
+    cmd: Cmd<'a>,
+}
+
+pub const CMD_CT: CmdCt<'static> = CmdCt { cmd: Cmd { code: &['C', 'T'], read_params: 0 } };
+
+impl CmdCt<'_> {
+    pub fn set(&self, side: Side, sql: SqlType) -> Vec<u8> {
+        let side: char = side.into();
+        // CT P2 encoding differs from MW P8: codes 1 and 2 are swapped.
+        // MW P8 1 = ENC/DEC, 2 = ENC. CT P2 1 = ENC only, 2 = ENC+DEC.
+        let sql = match sql {
+            SqlType::CtcssOff    => '0',
+            SqlType::CtcssEnc    => '1',
+            SqlType::CtcssEncDec => '2',
+            SqlType::Dcs         => '3',
+            SqlType::PrFreq      => '4',
+            SqlType::RevTone     => '5',
+        };
+        Cmd::tx_buffer(&self.cmd, Some(vec![side, sql]))
+    }
+}
+
+//------------------------------------
 // CmdId
 //------------------------------------
 
@@ -950,9 +1083,24 @@ impl CmdMw<'_> {
         buffer.append(&mut vec![mw.mode.into()]);
         buffer.append(&mut vec![mw.ch_type.into()]);
         buffer.append(&mut vec![mw.sql_type.into()]);
-        buffer.append(&mut vec!['0', '0']); // Dummy
+        buffer.append(&mut vec!['0', '0']); // fixed per CAT spec
         buffer.append(&mut vec![mw.shift.into()]);
         Ok(Cmd::tx_buffer(&self.cmd, Some(buffer)))
+    }
+}
+
+//------------------------------------
+// BM - VFO SUB-SIDE TO MEMORY CHANNEL
+//------------------------------------
+pub struct CmdBm<'a> {
+    cmd: Cmd<'a>,
+}
+
+pub const CMD_BM: CmdBm<'static> = CmdBm { cmd: Cmd { code: &['B', 'M'], read_params: 0 } };
+
+impl CmdBm<'_> {
+    pub fn save(&self) -> Vec<u8> {
+        Cmd::tx_buffer(&self.cmd, None)
     }
 }
 
@@ -1079,6 +1227,23 @@ impl CmdCn<'_> {
         let tone_code = buf3_to_u8(&buffer[4..7])?;
         trace!("tone_code: {:?}", tone_code);
         Ok(CnReply { side, tone_type, tone_code })
+    }
+
+    pub fn tone_code_from_string(tone_type: ToneType, s: &str) -> Result<ToneCode, ()> {
+        match tone_type {
+            ToneType::Ctcss => {
+                let freq: f32 = s.parse().map_err(|_| ())?;
+                CTCSS_CODES.iter().position(|&f| (f - freq).abs() < 0.05)
+                    .map(|i| i as ToneCode)
+                    .ok_or(())
+            }
+            ToneType::Dcs => {
+                let code: DcsCode = s.parse().map_err(|_| ())?;
+                DCS_CODES.iter().position(|&c| c == code)
+                    .map(|i| i as ToneCode)
+                    .ok_or(())
+            }
+        }
     }
 
     pub fn tone_code_to_string(tone_type: ToneType, tone_code: ToneCode) -> Result<String, ()> {

@@ -488,12 +488,28 @@ fn write_radio_data(cli: &Cli, file: &str) -> Result<(), ()> {
         bar.inc(1);
         let mem = MemoryReadWrite::try_from(rec.clone())?;
         debug!("Writing memory data for channel: {:?}", mem);
-        let _ = cat_send(&mut *port, &CMD_MW.set(mem.clone())?)?;
+        // Put main in Memory mode and select the channel so AM later writes
+        // back to the correct memory slot; switch to VFO to build up state.
+        let _ = cat_send(&mut *port, &CMD_VM.set(Side::Main, VmMode::Memory))?;
+        let _ = cat_send(&mut *port, &CMD_MC.set(Side::Main, mem.channel.clone()))?;
+        let _ = cat_send(&mut *port, &CMD_VM.set(Side::Main, VmMode::Vfo))?;
+        // Set shift while in FM mode (OS is only accepted in FM), then flip to
+        // the target mode. This also clears stale shift state on non-FM channels.
+        let _ = cat_send(&mut *port, &CMD_MD.set(Side::Main, Mode::Fm))?;
+        let _ = cat_send(&mut *port, &CMD_OS.set(Side::Main, mem.shift.clone()))?;
+        let _ = cat_send(&mut *port, &CMD_MD.set(Side::Main, mem.mode.clone()))?;
+        let _ = cat_send(&mut *port, &CMD_FA.set(mem.frequency_hz))?;
+        let _ = cat_send(&mut *port, &CMD_CT.set(Side::Main, mem.sql_type.clone()))?;
+        let ctcss_code = CmdCn::tone_code_from_string(ToneType::Ctcss, &rec.ctcss_tone)?;
+        let _ = cat_send(&mut *port, &CMD_CN.set(Side::Main, ToneType::Ctcss, ctcss_code))?;
+        let dcs_code = CmdCn::tone_code_from_string(ToneType::Dcs, &rec.dcs_tone)?;
+        let _ = cat_send(&mut *port, &CMD_CN.set(Side::Main, ToneType::Dcs, dcs_code))?;
+        // Commit the full VFO state to the selected memory channel.
+        let _ = cat_send(&mut *port, &CMD_AM.save())?;
         if let Some(tag) = rec.tag {
             debug!("Writing tag for channel: {:?}, tag: {:?}", mem.channel, tag);
             let _ = cat_send(&mut *port, &CMD_MT.set(mem.channel, tag)?)?;
         }
-        // TODO: write tone data via CMD_CN
     }
     bar.finish();
     if !quiet { println!("Memory data written to radio."); }
