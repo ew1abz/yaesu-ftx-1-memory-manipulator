@@ -44,7 +44,11 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libudev-dev
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Test (Linux x86_64 only)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --release --locked
 
       - name: Package (Unix)
         if: matrix.ext == 'tar.gz'
