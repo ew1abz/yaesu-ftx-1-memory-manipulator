@@ -1,34 +1,47 @@
 # Memory Channel Write Sequence
 
 How `--write-radio` commits a full memory channel (including CTCSS/DCS tones)
-to the FTX-1, and why the obvious approach with `MW` alone does not work.
+to the FTX-1, including how empty channel slots get populated.
 
 ## TL;DR
 
-The `MW` command cannot store tones. A single call to `MW` silently resets the
-channel's tone to the default (code 12 / 100.0 Hz). The working approach is to
-build up the full main-side VFO state with individual CAT commands and then
-commit it to memory with `AM`.
+`MW` alone cannot store tones — it silently resets the channel's tone to the
+default (code 12 / 100.0 Hz). `AM` alone cannot create empty channel slots —
+`MC` will not reliably select an unoccupied memory channel, so `AM` writes to
+whatever was previously selected.
+
+The working sequence does both: `MW` first to create the slot, then build
+up the full main-side VFO state with individual CAT commands and commit it
+with `AM`. The trailing `AM` overwrites whatever `MW` left behind, so tones
+end up correct.
 
 Per-channel sequence (see [`write_radio_data`](../src/main.rs) for the source):
 
-| # | Command                           | Purpose                                                       |
-| - | --------------------------------- | ------------------------------------------------------------- |
-| 1 | `VM P1=0 P2=11`                   | Main side → Memory mode                                       |
-| 2 | `MC P1=0 Pn=ccccc`                | Select target channel on main                                 |
-| 3 | `VM P1=0 P2=00`                   | Main side → VFO mode (anchors AM to the selected slot)        |
-| 4 | `MD P1=0 P2=4`                    | Force FM first, because OS only applies in FM mode            |
-| 5 | `OS P1=0 P2=<shift>`              | Set repeater shift (simplex / plus / minus / ARS)             |
-| 6 | `MD P1=0 P2=<mode>`               | Now set the real operating mode                               |
-| 7 | `FA nnnnnnnnn`                    | Set main VFO-A frequency                                      |
-| 8 | `CT P1=0 P2=<sql>`                | Set SQL type (see P2 encoding note below)                     |
-| 9 | `CN P1=0 P2=0 Pn=ccc`             | Set CTCSS tone on main                                         |
-| 10 | `CN P1=0 P2=1 Pn=ccc`            | Set DCS tone on main                                           |
-| 11 | `AM`                              | Commit full main VFO state to the currently selected channel  |
-| 12 | `MT ccccc<tag>`                   | Write the 12-char channel tag                                  |
+| #  | Command                | Purpose                                                      |
+| -- | ---------------------- | ------------------------------------------------------------ |
+|  1 | `MW ccccc...`          | Create the slot so subsequent `MC` can select it             |
+|  2 | `VM P1=0 P2=11`        | Main side → Memory mode                                      |
+|  3 | `MC P1=0 Pn=ccccc`     | Select target channel on main                                |
+|  4 | `VM P1=0 P2=00`        | Main side → VFO mode (anchors AM to the selected slot)       |
+|  5 | `MD P1=0 P2=4`         | Force FM first, because OS only applies in FM mode           |
+|  6 | `OS P1=0 P2=<shift>`   | Set repeater shift (simplex / plus / minus / ARS)            |
+|  7 | `MD P1=0 P2=<mode>`    | Now set the real operating mode                              |
+|  8 | `FA nnnnnnnnn`         | Set main VFO-A frequency                                     |
+|  9 | `CT P1=0 P2=<sql>`     | Set SQL type (see P2 encoding note below)                    |
+| 10 | `CN P1=0 P2=0 Pn=ccc`  | Set CTCSS tone on main                                       |
+| 11 | `CN P1=0 P2=1 Pn=ccc`  | Set DCS tone on main                                         |
+| 12 | `AM`                   | Commit full main VFO state to the currently selected channel |
+| 13 | `MT ccccc<tag>`        | Write the 12-char channel tag                                |
 
-`MW` is not used during write. It is still used elsewhere to probe whether the
-legacy path behaves as documented (it does not).
+## Scope: writes are additive, not destructive
+
+`--write-radio` only touches the channel numbers present in the CSV. Channels
+not in the CSV are left untouched on the radio. There is no documented CAT
+command for clearing/deleting a memory channel, and the tool does not attempt
+one — clearing a channel must be done from the radio's front panel.
+
+This means a "wipe and restore" workflow does not exist: writing a 16-channel
+CSV to a radio that currently holds 100 channels leaves 84 of them in place.
 
 ## Gotchas
 
@@ -55,7 +68,20 @@ dance is required so that:
   commands (`MD`, `OS`, `FA`, `CT`, `CN`) modify the VFO rather than the memory
   slot.
 
-### 3. `OS` is only accepted in FM mode
+### 3. `MC` cannot select an empty memory slot
+
+`MC P1=0 Pn=ccccc;` for a channel that has never been programmed silently
+leaves the previously-selected channel active. The radio reports no error.
+The downstream `AM` then writes to that previously-selected slot, not the
+intended one — which is why the bug presents as "old channels are updated,
+new channels are never created."
+
+Mitigation: send `MW` for the target channel *before* the `VM → MC → VM`
+dance. `MW` populates the slot with placeholder data (frequency, mode, shift),
+which is enough for `MC` to select it. The trailing `AM` then overwrites
+that placeholder with the correctly-prepared VFO state, including tones.
+
+### 4. `OS` is only accepted in FM mode
 
 The CAT spec notes: *"This command can be activated only with an FM mode."*
 In practice the radio silently ignores `OS` when the current mode is not FM,
@@ -66,7 +92,7 @@ Mitigation: always force FM via `MD` first, then send `OS`, then switch to the
 real target mode. For non-FM channels this correctly clears any stale shift
 state back to Simplex.
 
-### 4. `CT` P2 encoding differs from `MW` P8
+### 5. `CT` P2 encoding differs from `MW` P8
 
 The two commands use the *same* numeric field, with codes 1 and 2 swapped:
 
@@ -82,7 +108,7 @@ The two commands use the *same* numeric field, with codes 1 and 2 swapped:
 `CmdCt::set` in [`src/ftx1.rs`](../src/ftx1.rs) handles the swap so callers can
 pass the same `SqlType` enum used elsewhere.
 
-### 5. `VM` parameter format
+### 6. `VM` parameter format
 
 `VM P1 P2;` where:
 
@@ -109,6 +135,11 @@ Round-trip test on 16 memory channels (mix of FM / FM-N / AM / USB / CW-U /
 LSB modes, with and without CTCSS tones, simplex and minus-shift repeaters):
 `write-radio` from backup CSV → `read-radio` to new CSV → `diff` → byte
 identical.
+
+New-channel creation: writing a single-row CSV targeting a previously empty
+slot (e.g. channel 17 on a radio with channels 1–16 occupied) populates the
+slot and survives a `read-radio` round-trip, including CTCSS tones and
+repeater shifts. Existing channels in adjacent slots are not disturbed.
 
 ## Prior approaches that did not work
 

@@ -188,6 +188,7 @@ fn check_data(file_path: &str, quiet: bool, verbose: bool) -> Result<(), ()> {
     let mut valid_records = 0;
     let mut invalid_records = 0;
     let mut seen_channels: HashSet<String> = HashSet::new();
+    let mut duplicates_found = false;
 
     for (i, result) in rdr.deserialize().enumerate() {
         let record: CsvRecord = match result {
@@ -205,6 +206,7 @@ fn check_data(file_path: &str, quiet: bool, verbose: bool) -> Result<(), ()> {
         };
         if !seen_channels.insert(record.channel.clone()) {
             errors.push(format!("Channel '{}' appears more than once.", record.channel));
+            duplicates_found = true;
         }
 
         if errors.is_empty() {
@@ -232,6 +234,12 @@ fn check_data(file_path: &str, quiet: bool, verbose: bool) -> Result<(), ()> {
         Ok(())
     } else {
         if verbose && !quiet { println!("\nData has issues and may not be processable."); }
+        if duplicates_found && !quiet {
+            println!(
+                "\nTip: to renumber duplicate channels sequentially, run\n     python3 renumber_channels.py {} > fixed.csv",
+                file_path
+            );
+        }
         Err(())
     }
 }
@@ -505,6 +513,10 @@ fn write_radio_data(cli: &Cli, file: &str) -> Result<(), ()> {
         bar.inc(1);
         let mem = MemoryReadWrite::try_from(rec.clone())?;
         debug!("Writing memory data for channel: {:?}", mem);
+        // MW first to ensure the channel slot exists. AM-only fails to create
+        // new (empty) channels because MC can't reliably select an empty slot.
+        // MW resets tones, but the AM step below re-commits them from VFO state.
+        let _ = cat_send(&mut *port, &CMD_MW.set(mem.clone())?)?;
         // Put main in Memory mode and select the channel so AM later writes
         // back to the correct memory slot; switch to VFO to build up state.
         let _ = cat_send(&mut *port, &CMD_VM.set(Side::Main, VmMode::Memory))?;

@@ -85,3 +85,4 @@ archives.
 
 - Rearrange fields in table output
 - Responsive table output — assign each column a weight; drop low-weight columns first when the terminal is narrow
+- Read firmware versions from the radio and store them in the CSV file
