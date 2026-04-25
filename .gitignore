@@ -2,4 +2,5 @@
 /logs
 **/*.rs.bk
 *.csv
+!tests/fixtures/*.csv
 doc/*.pdf
