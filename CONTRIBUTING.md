@@ -84,4 +84,4 @@ archives.
 ## TODO
 
 - Rearrange fields in table output
-- Add animated GIF to README
+- Responsive table output — assign each column a weight; drop low-weight columns first when the terminal is narrow

@@ -4,6 +4,7 @@ use comfy_table::{Attribute, Cell, Color, ContentArrangement, Table};
 use indicatif::ProgressBar;
 use log::{debug, error, trace};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::io;
 use std::iter::zip;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -41,11 +42,11 @@ struct Cli {
     file: Option<String>,
 
     /// Read from radio
-    #[arg(long, group = "action")]
+    #[arg(short = 'r', long, group = "action")]
     read_radio: bool,
 
     /// Write to radio
-    #[arg(long, group = "action")]
+    #[arg(short = 'w', long, group = "action")]
     write_radio: bool,
 
     /// Check data in the file
@@ -166,7 +167,7 @@ fn main() -> Result<(), ()> {
         write_radio_data(&cli, &file)?;
     } else if cli.check_data {
         let file = require_file(&cli.file, "--check-data")?;
-        check_data(&file, cli.quiet)?;
+        check_data(&file, cli.quiet, true)?;
     } else if cli.print {
         let file = require_file(&cli.file, "--print")?;
         print_table(&file, cli.plain, cli.quiet)?;
@@ -177,12 +178,16 @@ fn main() -> Result<(), ()> {
     Ok(())
 }
 
-fn check_data(file_path: &str, quiet: bool) -> Result<(), ()> {
-    let mut rdr = csv::Reader::from_path(file_path).map_err(|e| {
-        if !quiet { println!("Error opening file '{}': {}", file_path, e); }
-    })?;
+fn check_data(file_path: &str, quiet: bool, verbose: bool) -> Result<(), ()> {
+    let mut rdr = csv::ReaderBuilder::new()
+        .comment(Some(b'#'))
+        .from_path(file_path)
+        .map_err(|e| {
+            if !quiet { println!("Error opening file '{}': {}", file_path, e); }
+        })?;
     let mut valid_records = 0;
     let mut invalid_records = 0;
+    let mut seen_channels: HashSet<String> = HashSet::new();
 
     for (i, result) in rdr.deserialize().enumerate() {
         let record: CsvRecord = match result {
@@ -194,23 +199,28 @@ fn check_data(file_path: &str, quiet: bool) -> Result<(), ()> {
             }
         };
 
-        match validate_record(&record) {
-            Ok(_) => {
-                valid_records += 1;
-            }
-            Err(errors) => {
-                invalid_records += 1;
-                if !quiet {
-                    println!("Record {} is invalid:", i + 1);
-                    for error in errors {
-                        println!("  - {}", error);
-                    }
+        let mut errors = match validate_record(&record) {
+            Ok(_) => Vec::new(),
+            Err(e) => e,
+        };
+        if !seen_channels.insert(record.channel.clone()) {
+            errors.push(format!("Channel '{}' appears more than once.", record.channel));
+        }
+
+        if errors.is_empty() {
+            valid_records += 1;
+        } else {
+            invalid_records += 1;
+            if !quiet {
+                println!("Record {} is invalid:", i + 1);
+                for error in errors {
+                    println!("  - {}", error);
                 }
             }
         }
     }
 
-    if !quiet {
+    if verbose && !quiet {
         println!("\n----- Validation Summary -----");
         println!("Total records processed: {}", valid_records + invalid_records);
         println!("Valid records: {}", valid_records);
@@ -218,10 +228,10 @@ fn check_data(file_path: &str, quiet: bool) -> Result<(), ()> {
     }
 
     if invalid_records == 0 {
-        if !quiet { println!("\nData looks good!"); }
+        if verbose && !quiet { println!("\nData looks good!"); }
         Ok(())
     } else {
-        if !quiet { println!("\nData has issues and may not be processable."); }
+        if verbose && !quiet { println!("\nData has issues and may not be processable."); }
         Err(())
     }
 }
@@ -284,7 +294,10 @@ fn validate_record(record: &CsvRecord) -> Result<(), Vec<String>> {
 
 fn print_table(file_path: &str, plain: bool, quiet: bool) -> Result<(), ()> {
     if quiet { return Ok(()); }
-    let mut rdr = csv::Reader::from_path(file_path).map_err(|_| ())?;
+    let mut rdr = csv::ReaderBuilder::new()
+        .comment(Some(b'#'))
+        .from_path(file_path)
+        .map_err(|_| ())?;
     let mut table = Table::new();
 
     if plain {
@@ -478,9 +491,13 @@ fn open_radio(port_name: &String, port_peed: u32, quiet: bool) -> Result<Box<dyn
 
 fn write_radio_data(cli: &Cli, file: &str) -> Result<(), ()> {
     let quiet = cli.quiet;
+    check_data(file, quiet, false)?;
     let mut port = open_radio(&cli.port, cli.speed, quiet)?;
 
-    let mut rdr = csv::Reader::from_path(file).map_err(|_| ())?;
+    let mut rdr = csv::ReaderBuilder::new()
+        .comment(Some(b'#'))
+        .from_path(file)
+        .map_err(|_| ())?;
     let records: Vec<CsvRecord> = rdr.deserialize::<CsvRecord>().filter_map(|r| r.ok()).collect();
     if !quiet { println!("Writing memory data from CSV file: {} ({} records)... ", file, records.len()); }
     let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(records.len() as u64) };

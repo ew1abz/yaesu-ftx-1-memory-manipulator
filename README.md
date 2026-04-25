@@ -4,13 +4,16 @@ A cross-platform command-line utility for backing up, restoring, and managing
 memory channels on Yaesu FTX-1 amateur radio transceivers. Channels are stored
 as CSV files, making them easy to edit in any spreadsheet application.
 
+![Reading memory channels from the radio](doc/demo-read.gif)
+
 ## Features
 
 - Read all memory channels from the radio to a CSV file
-- Edit channels in any spreadsheet software and write them back
+- Write memory channels from a CSV file to the radio
 - Print channels as a formatted table
 - Validate a CSV file without connecting to the radio
-- Supported radio: Yaesu FTX-1
+
+Supported radio: Yaesu FTX-1
 
 ## Installation
 
@@ -50,3 +53,21 @@ ftx1-mm --print --file channels.csv
 
 Default port: `/dev/ttyUSB0`. Default speed: 38400 baud. Run `ftx1-mm --help`
 for all options.
+
+## Limitations
+
+- **Not all memory channel fields are supported.** The per-channel fields
+  currently round-tripped are listed in
+  [doc/memory-channel-fields.md](doc/memory-channel-fields.md). Notably
+  unsupported: split TX frequency (`MZ`), Memory Group (M-GRP), and the
+  actual repeater offset in Hz (per-band menu setting, not per-channel).
+- **Radio settings are not touched.** This tool only reads and writes
+  memory channels. Global/per-band/per-side settings — IPO/pre-amp, DNR,
+  DNF, narrow filter, RF attenuator, noise blanker, AGC, band repeater
+  offsets, menu (`EX`) parameters — are out of scope.
+
+---
+
+⭐ If this program is useful to you, a star goes a long way — thank you!
+
+Made with ❤️ for terminal enthusiasts and spreadsheet power users.
