@@ -36,7 +36,7 @@ pub fn buf9_to_u32(buffer: &[u8]) -> Result<u32, ()> {
     let mut result: u32 = 0;
     for (i, item) in buffer.iter().enumerate().take(9) {
         if let Some(n) = (*item as char).to_digit(10) {
-            result += n as u32 * (10u32.pow(8 - i as u32));
+            result += n * (10u32.pow(8 - i as u32));
         } else {
             return Err(());
         }

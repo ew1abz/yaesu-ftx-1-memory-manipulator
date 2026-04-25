@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use core::fmt;
-use log::debug;
+use log::{debug, trace};
 use serde::{Deserialize, Serialize};
 
 // include parsing helpers from a separate file so both the binary module and the library
@@ -29,7 +29,7 @@ impl TryFrom<u32> for FrequencyHz {
 
     fn try_from(item: u32) -> Result<Self, Self::Error> {
         // 30kHz - 174MHz, 400MHz - 470MHz
-        if item >= 30_000 && item < 174_000_000 || item >= 400_000_000 && item < 470_000_000 {
+        if (30_000..174_000_000).contains(&item) || (400_000_000..470_000_000).contains(&item) {
             Ok(FrequencyHz { value: item })
         } else {
             Err(())
@@ -53,10 +53,17 @@ impl TryFrom<String> for FrequencyHz {
     type Error = ();
 
     fn try_from(item: String) -> Result<Self, Self::Error> {
-        if item.len() > 9 {
+        // Expect frequency string to be exactly 9 characters
+        if item.len() != 9 {
             return Err(());
         }
         FrequencyHz::try_from(item.as_bytes())
+    }
+}
+
+impl From<FrequencyHz> for String {
+    fn from(item: FrequencyHz) -> Self {
+        format!("{:09}", item.value)
     }
 }
 
@@ -104,9 +111,15 @@ impl TryFrom<&[u8]> for ClarifierOffsetHz {
     }
 }
 
+impl From<ClarifierOffsetHz> for String {
+    fn from(item: ClarifierOffsetHz) -> Self {
+        format!("{:+05}", item.value)
+    }
+}
+
 impl fmt::Display for ClarifierOffsetHz {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:+05}", self.value,)
+        write!(f, "{:+05}", self.value)
     }
 }
 
@@ -144,6 +157,15 @@ impl TryFrom<char> for RxClarifierOnOff {
     }
 }
 
+impl From<RxClarifierOnOff> for char {
+    fn from(item: RxClarifierOnOff) -> Self {
+        match item {
+            RxClarifierOnOff::RxClarifierOff => '0',
+            RxClarifierOnOff::RxClarifierOn => '1',
+        }
+    }
+}
+
 //------------------------------------
 // TX Clarifier
 //------------------------------------
@@ -174,6 +196,15 @@ impl TryFrom<char> for TxClarifierOnOff {
             '0' => Ok(TxClarifierOnOff::TxClarifierOff),
             '1' => Ok(TxClarifierOnOff::TxClarifierOn),
             _ => Err(()),
+        }
+    }
+}
+
+impl From<TxClarifierOnOff> for char {
+    fn from(item: TxClarifierOnOff) -> Self {
+        match item {
+            TxClarifierOnOff::TxClarifierOff => '0',
+            TxClarifierOnOff::TxClarifierOn => '1',
         }
     }
 }
@@ -247,6 +278,19 @@ impl fmt::Display for ChType {
     }
 }
 
+impl From<ChType> for char {
+    fn from(item: ChType) -> Self {
+        match item {
+            ChType::Vfo => '0',
+            ChType::MemoryChannel => '1',
+            ChType::MemoryTune => '2',
+            ChType::Qmb => '3',
+            ChType::Reserved4 => '4',
+            ChType::Pms => '5',
+        }
+    }
+}
+
 impl TryFrom<&[char; 5]> for MemoryChannel {
     type Error = ();
 
@@ -285,6 +329,19 @@ impl TryFrom<&[char; 5]> for MemoryChannel {
     }
 }
 
+impl TryFrom<String> for MemoryChannel {
+    type Error = ();
+
+    fn try_from(item: String) -> Result<Self, Self::Error> {
+        if item.len() != 5 {
+            return Err(());
+        }
+        let chars: Vec<char> = item.chars().collect();
+        let ch_array: [char; 5] = [chars[0], chars[1], chars[2], chars[3], chars[4]];
+        Self::try_from(&ch_array)
+    }
+}
+
 impl MemoryChannel {
     pub fn to_chars(&self) -> Result<[char; 5], ()> {
         match self {
@@ -310,6 +367,11 @@ impl MemoryChannel {
             }
             MemoryChannel::EmergencyChannel => Ok(['E', 'M', 'G', 'C', 'H']),
         }
+    }
+
+    pub fn to_string(&self) -> Result<String, ()> {
+        let chars = self.to_chars()?;
+        Ok(chars.iter().collect())
     }
 }
 
@@ -366,6 +428,16 @@ impl fmt::Display for Shift {
     }
 }
 
+impl From<Shift> for char {
+    fn from(item: Shift) -> Self {
+        match item {
+            Shift::Simplex => '0',
+            Shift::PlusShift => '1',
+            Shift::MinusShift => '2',
+        }
+    }
+}
+
 //------------------------------------
 // SqlType
 //------------------------------------
@@ -408,6 +480,19 @@ impl fmt::Display for SqlType {
     }
 }
 
+impl From<SqlType> for char {
+    fn from(item: SqlType) -> Self {
+        match item {
+            SqlType::CtcssOff => '0',
+            SqlType::CtcssEncDec => '1',
+            SqlType::CtcssEnc => '2',
+            SqlType::Dcs => '3',
+            SqlType::PrFreq => '4',
+            SqlType::RevTone => '5',
+        }
+    }
+}
+
 //------------------------------------
 // Mode
 //------------------------------------
@@ -429,26 +514,30 @@ pub enum Mode {
     AmN = 0x0d,
     Psk = 0x0e,
     DataFmN = 0x0f,
+    C4fmDn = 0x11,
+    C4fmVw = 0x12,
 }
 
-impl Mode {
-    fn code(&self) -> char {
-        match self {
-            Self::Lsb => '1',
-            Self::Usb => '2',
-            Self::CwU => '3',
-            Self::Fm => '4',
-            Self::Am => '5',
-            Self::RttyL => '6',
-            Self::CwL => '7',
-            Self::DataL => '8',
-            Self::RttyU => '9',
-            Self::DataFm => 'A',
-            Self::FmN => 'B',
-            Self::DataU => 'C',
-            Self::AmN => 'D',
-            Self::Psk => 'E',
-            Self::DataFmN => 'F',
+impl From<Mode> for char {
+    fn from(item: Mode) -> Self {
+        match item {
+            Mode::Lsb => '1',
+            Mode::Usb => '2',
+            Mode::CwU => '3',
+            Mode::Fm => '4',
+            Mode::Am => '5',
+            Mode::RttyL => '6',
+            Mode::CwL => '7',
+            Mode::DataL => '8',
+            Mode::RttyU => '9',
+            Mode::DataFm => 'A',
+            Mode::FmN => 'B',
+            Mode::DataU => 'C',
+            Mode::AmN => 'D',
+            Mode::Psk => 'E',
+            Mode::DataFmN => 'F',
+            Mode::C4fmDn => 'H',
+            Mode::C4fmVw => 'I',
         }
     }
 }
@@ -473,6 +562,8 @@ impl TryFrom<char> for Mode {
             'D' => Ok(Self::AmN),
             'E' => Ok(Self::Psk),
             'F' => Ok(Self::DataFmN),
+            'H' => Ok(Self::C4fmDn),
+            'I' => Ok(Self::C4fmVw),
             _ => Err(()),
         }
     }
@@ -504,6 +595,35 @@ impl fmt::Display for Mode {
             Mode::AmN => write!(f, "AM-N"),
             Mode::Psk => write!(f, "PSK"),
             Mode::DataFmN => write!(f, "DATA-FM-N"),
+            Mode::C4fmDn => write!(f, "C4FM-DN"),
+            Mode::C4fmVw => write!(f, "C4FM-VW"),
+        }
+    }
+}
+
+impl TryFrom<String> for Mode {
+    type Error = ();
+
+    fn try_from(item: String) -> Result<Self, Self::Error> {
+        match item.as_str() {
+            "LSB" => Ok(Self::Lsb),
+            "USB" => Ok(Self::Usb),
+            "CW-U" => Ok(Self::CwU),
+            "FM" => Ok(Self::Fm),
+            "AM" => Ok(Self::Am),
+            "RTTY-L" => Ok(Self::RttyL),
+            "CW-L" => Ok(Self::CwL),
+            "DATA-L" => Ok(Self::DataL),
+            "RTTY-U" => Ok(Self::RttyU),
+            "DATA-FM" => Ok(Self::DataFm),
+            "FM-N" => Ok(Self::FmN),
+            "DATA-U" => Ok(Self::DataU),
+            "AM-N" => Ok(Self::AmN),
+            "PSK" => Ok(Self::Psk),
+            "DATA-FM-N" => Ok(Self::DataFmN),
+            "C4FM-DN" => Ok(Self::C4fmDn),
+            "C4FM-VW" => Ok(Self::C4fmVw),
+            _ => Err(()),
         }
     }
 }
@@ -532,16 +652,156 @@ impl Cmd<'_> {
 
     /// Validate received packet from a transceiver.
     /// Returns Ok() if the answer is valid, Error() otherwise.
-    fn is_reply_ok(&self, rx_buffer: &Vec<u8>) -> Result<(), CmdError> {
+    fn is_reply_ok(&self, rx_buffer: &[u8]) -> Result<(), CmdError> {
         if rx_buffer.len() < 3 {
             return Err(());
         }
-        let code0 = rx_buffer.contains(&(self.code[0] as u8));
-        let code1 = rx_buffer.contains(&(self.code[1] as u8));
-        let params = rx_buffer.len() - 3 == self.read_params;
-        let terminator = rx_buffer.contains(&b';');
-        debug!("{} {} {} {} {}", &code0, &code1, &params, rx_buffer.len() - 3, &terminator);
-        (terminator & code0 & code1 & params).then_some(()).ok_or(())
+        let code0_ok = rx_buffer.contains(&(self.code[0] as u8));
+        let code1_ok = rx_buffer.contains(&(self.code[1] as u8));
+        let params_ok = rx_buffer.len() - 3 == self.read_params;
+        let terminator_ok = rx_buffer.contains(&b';');
+        trace!(
+            "is_reply_ok: code0:{} code1:{} params:{} terminator:{} len: {}",
+            &code0_ok,
+            &code1_ok,
+            &params_ok,
+            &terminator_ok,
+            rx_buffer.len()
+        );
+        (terminator_ok & code0_ok & code1_ok & params_ok).then_some(()).ok_or(())
+    }
+}
+
+//------------------------------------
+// VM - VFO/MEMORY MODE
+//------------------------------------
+pub enum VmMode {
+    Vfo,
+    Mt,
+    Memory,
+    Pms,
+    PmsEdge,
+    BandMemory5Mhz,
+    Emg,
+}
+
+impl From<VmMode> for &'static str {
+    fn from(item: VmMode) -> Self {
+        match item {
+            VmMode::Vfo          => "00",
+            VmMode::Mt           => "10",
+            VmMode::Memory       => "11",
+            VmMode::Pms          => "20",
+            VmMode::PmsEdge      => "21",
+            VmMode::BandMemory5Mhz => "51",
+            VmMode::Emg          => "91",
+        }
+    }
+}
+
+pub struct CmdVm<'a> {
+    cmd: Cmd<'a>,
+}
+
+pub const CMD_VM: CmdVm<'static> = CmdVm { cmd: Cmd { code: &['V', 'M'], read_params: 0 } };
+
+impl CmdVm<'_> {
+    pub fn set(&self, side: Side, mode: VmMode) -> Vec<u8> {
+        let side: char = side.into();
+        let mode: &str = mode.into();
+        let s: Vec<char> = format!("{}{}", side, mode).chars().collect();
+        Cmd::tx_buffer(&self.cmd, Some(s))
+    }
+}
+
+//------------------------------------
+// FA - VFO-A FREQUENCY
+//------------------------------------
+pub struct CmdFa<'a> {
+    cmd: Cmd<'a>,
+}
+
+pub const CMD_FA: CmdFa<'static> = CmdFa { cmd: Cmd { code: &['F', 'A'], read_params: 0 } };
+
+impl CmdFa<'_> {
+    pub fn set(&self, freq: FrequencyHz) -> Vec<u8> {
+        let s: String = freq.into();
+        Cmd::tx_buffer(&self.cmd, Some(s.chars().collect()))
+    }
+}
+
+//------------------------------------
+// AM - MAIN-SIDE TO MEMORY CHANNEL
+//------------------------------------
+pub struct CmdAm<'a> {
+    cmd: Cmd<'a>,
+}
+
+pub const CMD_AM: CmdAm<'static> = CmdAm { cmd: Cmd { code: &['A', 'M'], read_params: 0 } };
+
+impl CmdAm<'_> {
+    pub fn save(&self) -> Vec<u8> {
+        Cmd::tx_buffer(&self.cmd, None)
+    }
+}
+
+//------------------------------------
+// MD - OPERATING MODE
+//------------------------------------
+pub struct CmdMd<'a> {
+    cmd: Cmd<'a>,
+}
+
+pub const CMD_MD: CmdMd<'static> = CmdMd { cmd: Cmd { code: &['M', 'D'], read_params: 0 } };
+
+impl CmdMd<'_> {
+    pub fn set(&self, side: Side, mode: Mode) -> Vec<u8> {
+        let side: char = side.into();
+        let mode: char = mode.into();
+        Cmd::tx_buffer(&self.cmd, Some(vec![side, mode]))
+    }
+}
+
+//------------------------------------
+// OS - OFFSET (REPEATER SHIFT)
+//------------------------------------
+pub struct CmdOs<'a> {
+    cmd: Cmd<'a>,
+}
+
+pub const CMD_OS: CmdOs<'static> = CmdOs { cmd: Cmd { code: &['O', 'S'], read_params: 0 } };
+
+impl CmdOs<'_> {
+    pub fn set(&self, side: Side, shift: Shift) -> Vec<u8> {
+        let side: char = side.into();
+        let shift: char = shift.into();
+        Cmd::tx_buffer(&self.cmd, Some(vec![side, shift]))
+    }
+}
+
+//------------------------------------
+// CT - SQL TYPE
+//------------------------------------
+pub struct CmdCt<'a> {
+    cmd: Cmd<'a>,
+}
+
+pub const CMD_CT: CmdCt<'static> = CmdCt { cmd: Cmd { code: &['C', 'T'], read_params: 0 } };
+
+impl CmdCt<'_> {
+    pub fn set(&self, side: Side, sql: SqlType) -> Vec<u8> {
+        let side: char = side.into();
+        // CT P2 encoding differs from MW P8: codes 1 and 2 are swapped.
+        // MW P8 1 = ENC/DEC, 2 = ENC. CT P2 1 = ENC only, 2 = ENC+DEC.
+        let sql = match sql {
+            SqlType::CtcssOff    => '0',
+            SqlType::CtcssEnc    => '1',
+            SqlType::CtcssEncDec => '2',
+            SqlType::Dcs         => '3',
+            SqlType::PrFreq      => '4',
+            SqlType::RevTone     => '5',
+        };
+        Cmd::tx_buffer(&self.cmd, Some(vec![side, sql]))
     }
 }
 
@@ -567,7 +827,7 @@ impl CmdId<'_> {
         Cmd::tx_buffer(&self.cmd, None)
     }
 
-    pub fn decode(&self, buffer: &Vec<u8>) -> Result<u16, ()> {
+    pub fn decode(&self, buffer: &[u8]) -> Result<u16, ()> {
         Cmd::is_reply_ok(&self.cmd, buffer)?;
         let id = buf4_to_u16(&buffer[2..6])?;
         Ok(id)
@@ -583,10 +843,10 @@ impl CmdId<'_> {
 }
 
 //------------------------------------
-// CmdMemoryRead
+// MR - MEMORY CHANNEL READ
 //------------------------------------
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct MemoryRead {
+pub struct MemoryReadWrite {
     pub channel: MemoryChannel,                 // 5 positions [00001]
     pub frequency_hz: FrequencyHz,              // 9 positions [432100000]
     pub clarifier_offset_hz: ClarifierOffsetHz, // 5 positions [+0015]
@@ -594,11 +854,11 @@ pub struct MemoryRead {
     pub tx_clarifier_enabled: TxClarifierOnOff, // 1 position [0: OFF, 1: ON]
     pub mode: Mode,                             // 1 positions
     pub ch_type: ChType, // 1 position [0: VFO 1: Memory Channel 2: Memory Tune 3: Quick Memory Bank (QMB) 4: - 5: PMS]
-    pub sql_type: SqlType,      // 1 position [0: CTCSS “OFF” 1: CTCSS ENC/DEC 2: CTCSS ENC]
+    pub sql_type: SqlType, // 1 position [0: CTCSS “OFF” 1: CTCSS ENC/DEC 2: CTCSS ENC]
     pub shift: Shift,    // 1 position [0: Simplex 1: Plus Shift 2: Minus Shift]
 }
 
-impl Default for MemoryRead {
+impl Default for MemoryReadWrite {
     fn default() -> Self {
         Self {
             channel: MemoryChannel::VfoMtQmb,
@@ -623,13 +883,12 @@ pub const CMD_MR: CmdMr<'static> = CmdMr { cmd: Cmd { code: &['M', 'R'], read_pa
 impl CmdMr<'_> {
     pub fn read(&self, ch: MemoryChannel) -> Vec<u8> {
         let s = ch.to_chars().unwrap();
-        debug!("DEBUG: CMD_MT::read input: {:?}", s);
         Cmd::tx_buffer(&self.cmd, Some(s.to_vec()))
     }
 
-    pub fn decode(&self, buffer: &Vec<u8>) -> Result<MemoryRead, ()> {
+    pub fn decode(&self, buffer: &[u8]) -> Result<MemoryReadWrite, ()> {
         // MR00001007000000+000000110000;
-        let mut mr = MemoryRead::default();
+        let mut mr = MemoryReadWrite::default();
         Cmd::is_reply_ok(&self.cmd, buffer)?;
         let ch_chars: [char; 5] = [
             buffer[2] as char,
@@ -653,7 +912,7 @@ impl CmdMr<'_> {
     }
 }
 
-impl fmt::Display for MemoryRead {
+impl fmt::Display for MemoryReadWrite {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -683,34 +942,44 @@ pub const CMD_MT: CmdMt<'static> = CmdMt { cmd: Cmd { code: &['M', 'T'], read_pa
 impl CmdMt<'_> {
     pub fn read(&self, ch: MemoryChannel) -> Vec<u8> {
         let s = ch.to_chars().unwrap();
-        debug!("CMD_MT::read input: {:?}", s);
         Cmd::tx_buffer(&self.cmd, Some(s.to_vec()))
     }
 
-    pub fn decode(&self, buffer: &Vec<u8>) -> Result<String, ()> {
-        debug!("CMD_MT::decode input: {:?}", buffer);
+    pub fn decode(&self, buffer: &[u8]) -> Result<String, ()> {
         Cmd::is_reply_ok(&self.cmd, buffer)?;
         let _channel = &buffer[2..6];
         let tag = buffer[7..19].iter().map(|&b| b as char).collect();
         Ok(tag)
+    }
+
+    pub fn set(&self, ch: MemoryChannel, tag: String) -> Result<Vec<u8>, ()> {
+        let mut buffer = Vec::<char>::new();
+        buffer.append(ch.to_chars().unwrap().to_vec().as_mut());
+        // Format tag to exactly 12 characters, padding with spaces if shorter, truncating if longer
+        let formatted_tag: String =
+            if tag.len() > 12 { tag.chars().take(12).collect() } else { format!("{: <12}", tag) };
+        buffer.append(formatted_tag.chars().collect::<Vec<char>>().as_mut());
+        Ok(Cmd::tx_buffer(&self.cmd, Some(buffer)))
     }
 }
 
 //------------------------------------
 // MC - MEMORY CHANNEL
 //------------------------------------
+#[derive(Clone, Debug)]
 pub enum Side {
     Main = 0,
     Sub = 1,
 }
 
-impl TryFrom<&u8> for Side {
+impl TryFrom<char> for Side {
     type Error = ();
 
-    fn try_from(item: &u8) -> Result<Self, Self::Error> {
+    fn try_from(item: char) -> Result<Self, Self::Error> {
+        debug!("DEBUG: Side::try_from input: {:}", item);
         match item {
-            0 => Ok(Side::Main),
-            1 => Ok(Side::Sub),
+            '0' => Ok(Side::Main),
+            '1' => Ok(Side::Sub),
             _ => Err(()),
         }
     }
@@ -737,22 +1006,20 @@ pub struct CmdMc<'a> {
 pub const CMD_MC: CmdMc<'static> = CmdMc { cmd: Cmd { code: &['M', 'C'], read_params: 6 } };
 
 impl CmdMc<'_> {
-    pub fn read(&self) -> Vec<u8> {
-        Cmd::tx_buffer(&self.cmd, None)
+    pub fn read(&self, side: Side) -> Vec<u8> {
+        Cmd::tx_buffer(&self.cmd, Some(vec![side.into()]))
     }
 
     pub fn set(&self, side: Side, ch: MemoryChannel) -> Vec<u8> {
         let mut tx = Vec::<char>::new();
         tx.push(side.into());
         tx.extend(ch.to_chars().unwrap().to_vec());
-        debug!("CMD_MC::set input: {:?}", tx);
         Cmd::tx_buffer(&self.cmd, Some(tx))
     }
 
-    pub fn decode(&self, buffer: &Vec<u8>) -> Result<McReply, ()> {
-        debug!("CMD_MC::decode input: {:?}", buffer);
+    pub fn decode(&self, buffer: &[u8]) -> Result<McReply, ()> {
         Cmd::is_reply_ok(&self.cmd, buffer)?;
-        let side = Side::try_from(&buffer[2]).unwrap();
+        let side = Side::try_from(buffer[2] as char)?;
         let ch: [char; 5] = [
             buffer[3] as char,
             buffer[4] as char,
@@ -766,8 +1033,81 @@ impl CmdMc<'_> {
 }
 
 //------------------------------------
+// MW - MEMORY CHANNEL WRITE
+//------------------------------------
+
+// #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+// pub struct MemoryReadWrite {
+//     pub channel: MemoryChannel,                 // 5 positions [00001]
+//     pub frequency_hz: FrequencyHz,              // 9 positions [432100000]
+//     pub clarifier_offset_hz: ClarifierOffsetHz, // 5 positions [+0015]
+//     pub rx_clarifier_enabled: RxClarifierOnOff, // 1 position [0: OFF, 1: ON]
+//     pub tx_clarifier_enabled: TxClarifierOnOff, // 1 position [0: OFF, 1: ON]
+//     pub mode: Mode,                             // 1 positions
+//     pub ch_type: ChType, // 1 position [0: VFO 1: Memory Channel 2: Memory Tune 3: Quick Memory Bank (QMB) 4: - 5: PMS]
+//     pub sql_type: SqlType,      // 1 position [0: CTCSS “OFF” 1: CTCSS ENC/DEC 2: CTCSS ENC]
+//     pub shift: Shift,    // 1 position [0: Simplex 1: Plus Shift 2: Minus Shift]
+// }
+
+// impl Default for MemoryReadWrite {
+//     fn default() -> Self {
+//         Self {
+//             channel: MemoryChannel::VfoMtQmb,
+//             frequency_hz: FrequencyHz { value: 0 },
+//             clarifier_offset_hz: ClarifierOffsetHz { value: 0 },
+//             rx_clarifier_enabled: RxClarifierOnOff::RxClarifierOff,
+//             tx_clarifier_enabled: TxClarifierOnOff::TxClarifierOff,
+//             mode: Mode::Lsb,
+//             ch_type: ChType::Vfo,
+//             sql_type: SqlType::CtcssOff,
+//             shift: Shift::Simplex,
+//         }
+//     }
+// }
+
+pub struct CmdMw<'a> {
+    cmd: Cmd<'a>,
+}
+
+pub const CMD_MW: CmdMw<'static> = CmdMw { cmd: Cmd { code: &['M', 'W'], read_params: 0 } };
+impl CmdMw<'_> {
+    pub fn set(&self, mw: MemoryReadWrite) -> Result<Vec<u8>, ()> {
+        let mut buffer = Vec::<char>::new();
+        buffer.append(mw.channel.to_chars().unwrap().to_vec().as_mut());
+        let frequency_hz: String = mw.frequency_hz.into();
+        buffer.append(frequency_hz.chars().collect::<Vec<char>>().as_mut()); // todo: make a separate function to get chars
+        let clarifier_offset_hz: String = mw.clarifier_offset_hz.into();
+        buffer.append(clarifier_offset_hz.chars().collect::<Vec<char>>().as_mut());
+        buffer.append(&mut vec![mw.rx_clarifier_enabled.into()]);
+        buffer.append(&mut vec![mw.tx_clarifier_enabled.into()]);
+        buffer.append(&mut vec![mw.mode.into()]);
+        buffer.append(&mut vec![mw.ch_type.into()]);
+        buffer.append(&mut vec![mw.sql_type.into()]);
+        buffer.append(&mut vec!['0', '0']); // fixed per CAT spec
+        buffer.append(&mut vec![mw.shift.into()]);
+        Ok(Cmd::tx_buffer(&self.cmd, Some(buffer)))
+    }
+}
+
+//------------------------------------
+// BM - VFO SUB-SIDE TO MEMORY CHANNEL
+//------------------------------------
+pub struct CmdBm<'a> {
+    cmd: Cmd<'a>,
+}
+
+pub const CMD_BM: CmdBm<'static> = CmdBm { cmd: Cmd { code: &['B', 'M'], read_params: 0 } };
+
+impl CmdBm<'_> {
+    pub fn save(&self) -> Vec<u8> {
+        Cmd::tx_buffer(&self.cmd, None)
+    }
+}
+
+//------------------------------------
 // CN CTCSS TONE FREQUENCY / DCS CODE
 //------------------------------------
+#[derive(Clone, Debug)]
 pub enum ToneType {
     Ctcss = 0,
     Dcs = 1,
@@ -782,41 +1122,46 @@ impl From<ToneType> for char {
     }
 }
 
-impl TryFrom<&u8> for ToneType {
+impl From<ToneType> for String {
+    fn from(item: ToneType) -> Self {
+        match item {
+            ToneType::Ctcss => "CTCSS".to_string(),
+            ToneType::Dcs => "DCS".to_string(),
+        }
+    }
+}
+
+impl TryFrom<char> for ToneType {
     type Error = ();
 
-    fn try_from(item: &u8) -> Result<Self, Self::Error> {
+    fn try_from(item: char) -> Result<Self, Self::Error> {
         match item {
-            0 => Ok(ToneType::Ctcss),
-            1 => Ok(ToneType::Dcs),
+            '0' => Ok(ToneType::Ctcss),
+            '1' => Ok(ToneType::Dcs),
             _ => Err(()),
         }
     }
 }
 
-type CtcssFreq = f32;
-type DcsCode = u16;
-type ToneCode = u8;
+pub type CtcssFreq = f32;
+pub type DcsCode = u16;
+pub type ToneCode = u8;
 
 const CTCSS_CODES: [CtcssFreq; 50] = [
-    67.0, 69.3, 71.9, 74.4, 77.0, 79.7, 82.5, 85.4, 88.5,
-    91.5, 94.8, 97.4, 100.0, 103.5, 107.2, 110.9, 114.8, 118.8,
-    123.0, 127.3, 131.8, 136.5, 141.3, 146.2, 151.4, 156.7, 159.8, // 150.0
-    162.2, 165.5, 167.9, 171.3, 173.8, 177.3, 179.9, 183.5, 186.2,
-    189.9, 192.8, 196.6, 199.5, 203.5, 206.5, 210.7, 218.1, 225.7,
-    229.1, 233.6, 241.8, 250.3, 254.1
+    67.0, 69.3, 71.9, 74.4, 77.0, 79.7, 82.5, 85.4, 88.5, 91.5, 94.8, 97.4, 100.0, 103.5, 107.2,
+    110.9, 114.8, 118.8, 123.0, 127.3, 131.8, 136.5, 141.3, 146.2, 151.4, 156.7,
+    159.8, // 150.0
+    162.2, 165.5, 167.9, 171.3, 173.8, 177.3, 179.9, 183.5, 186.2, 189.9, 192.8, 196.6, 199.5,
+    203.5, 206.5, 210.7, 218.1, 225.7, 229.1, 233.6, 241.8, 250.3, 254.1,
 ];
 
 const DCS_CODES: [DcsCode; 104] = [
-    23, 25, 26, 31, 32, 36, 43, 47, 51, 53, 54, 65, 71, 72, 73,
-    74, 114, 115, 116, 122, 125, 131, 132, 134, 143, 145, 152,
-    155, 156, 162, 165, 172, 174, 205, 212, 223, 225, 226, 243,
-    244, 245, 246, 251, 252, 255, 261, 263, 265, 266, 271, 274,
-    306, 311, 315, 325, 331, 332, 343, 346, 351, 356, 364, 365,
-    371, 411, 412, 413, 423, 431, 432, 445, 446, 452, 454, 455,
-    462, 464, 465, 466, 503, 506, 516, 523, 565, 532, 546, 565,
-    606, 612, 624, 627, 631, 632, 654, 662, 664, 703, 712, 723,
-    731, 732, 734, 743, 754
+    23, 25, 26, 31, 32, 36, 43, 47, 51, 53, 54, 65, 71, 72, 73, 74, 114, 115, 116, 122, 125, 131,
+    132, 134, 143, 145, 152, 155, 156, 162, 165, 172, 174, 205, 212, 223, 225, 226, 243, 244, 245,
+    246, 251, 252, 255, 261, 263, 265, 266, 271, 274, 306, 311, 315, 325, 331, 332, 343, 346, 351,
+    356, 364, 365, 371, 411, 412, 413, 423, 431, 432, 445, 446, 452, 454, 455, 462, 464, 465, 466,
+    503, 506, 516, 523, 565, 532, 546, 565, 606, 612, 624, 627, 631, 632, 654, 662, 664, 703, 712,
+    723, 731, 732, 734, 743, 754,
 ];
 
 pub struct CmdCn<'a> {
@@ -825,18 +1170,44 @@ pub struct CmdCn<'a> {
 
 pub const CMD_CN: CmdCn<'static> = CmdCn { cmd: Cmd { code: &['C', 'N'], read_params: 5 } };
 
+#[derive(Clone)]
 pub struct CnReply {
-    side: Side,
-    tone_type: ToneType,
-    tone_code: ToneCode,
+    pub side: Side,
+    pub tone_type: ToneType,
+    pub tone_code: ToneCode,
 }
+
+impl From<CnReply> for String {
+    fn from(item: CnReply) -> Self {
+        let side = match item.side {
+            Side::Main => "MAIN",
+            Side::Sub => "SUB",
+        };
+        let tone_type: String = item.clone().tone_type.into();
+        let tone_code = match item.tone_type {
+            ToneType::Ctcss => CTCSS_CODES[item.tone_code as usize].to_string(),
+            ToneType::Dcs => DCS_CODES[item.tone_code as usize].to_string(),
+        };
+        format!("{} {} {}", side, tone_type, tone_code)
+    }
+}
+
+// impl TryFrom<&u8> for CnReply {
+//         let tone_code = item.tone_code;
+//         format!("{} {} {}", side, tone_type, tone_code)
+//     }
+// }
+
+// impl CtcssFreq {
+//     fn to_string(self) -> String {
+//         CTCSS_CODES[self as usize - 1].to_string();
+//         format!("{:.1}", self)
+//     }
+// }
 
 impl CmdCn<'_> {
     pub fn read(&self, side: Side, tone_type: ToneType) -> Vec<u8> {
-        let mut tx = Vec::<char>::new();
-        tx.push(side.into());
-        tx.push(tone_type.into());
-        debug!("CMD_CN::read input: {:?}", tx);
+        let tx = vec![side.into(), tone_type.into()];
         Cmd::tx_buffer(&self.cmd, Some(tx))
     }
 
@@ -844,17 +1215,54 @@ impl CmdCn<'_> {
         let sd: char = sd.into();
         let tt: char = tt.into();
         let s = format!("{}{}{:03}", sd, tt, cd);
-        debug!("CMD_CN::set input: {:?}", s);
-        Cmd::tx_buffer(&self.cmd, Some(s.chars().map(|c| c as char).collect::<Vec<char>>()))
+        Cmd::tx_buffer(&self.cmd, Some(s.chars().collect::<Vec<char>>()))
     }
 
-    pub fn decode(&self, buffer: &Vec<u8>) -> Result<CnReply, ()> {
-        debug!("CMD_CN::decode input: {:?}", buffer);
+    pub fn decode(&self, buffer: &[u8]) -> Result<CnReply, ()> {
         Cmd::is_reply_ok(&self.cmd, buffer)?;
-        let side = Side::try_from(&buffer[2]).unwrap();
-        let tone_type = ToneType::try_from(&buffer[3]).unwrap();
-        let tone_code = buf3_to_u8(&buffer[4..7]).unwrap();
+        let side = Side::try_from(buffer[2] as char)?;
+        trace!("side: {:?}", side);
+        let tone_type = ToneType::try_from(buffer[3] as char)?;
+        trace!("tone_type: {:?}", tone_type);
+        let tone_code = buf3_to_u8(&buffer[4..7])?;
+        trace!("tone_code: {:?}", tone_code);
         Ok(CnReply { side, tone_type, tone_code })
+    }
+
+    pub fn tone_code_from_string(tone_type: ToneType, s: &str) -> Result<ToneCode, ()> {
+        match tone_type {
+            ToneType::Ctcss => {
+                let freq: f32 = s.parse().map_err(|_| ())?;
+                CTCSS_CODES.iter().position(|&f| (f - freq).abs() < 0.05)
+                    .map(|i| i as ToneCode)
+                    .ok_or(())
+            }
+            ToneType::Dcs => {
+                let code: DcsCode = s.parse().map_err(|_| ())?;
+                DCS_CODES.iter().position(|&c| c == code)
+                    .map(|i| i as ToneCode)
+                    .ok_or(())
+            }
+        }
+    }
+
+    pub fn tone_code_to_string(tone_type: ToneType, tone_code: ToneCode) -> Result<String, ()> {
+        match tone_type {
+            ToneType::Ctcss => {
+                if (tone_code as usize) < CTCSS_CODES.len() {
+                    Ok(format!("{:.1}", CTCSS_CODES[tone_code as usize]))
+                } else {
+                    Err(())
+                }
+            }
+            ToneType::Dcs => {
+                if (tone_code as usize) < DCS_CODES.len() {
+                    Ok(format!("{}", DCS_CODES[tone_code as usize]))
+                } else {
+                    Err(())
+                }
+            }
+        }
     }
 }
 
@@ -887,6 +1295,60 @@ mod tests {
     }
 
     #[test]
+    fn test_memory_channel_from_chars_valid() {
+        // Positive tests for try_from
+        assert_eq!(
+            MemoryChannel::try_from(&['0', '0', '0', '1', '2']).unwrap(),
+            MemoryChannel::Mem(12)
+        );
+        assert_eq!(
+            MemoryChannel::try_from(&['P', '-', '1', '0', 'L']).unwrap(),
+            MemoryChannel::Pms(PmsChannel { slot: 10, lower_upper: PmsLowerUpper::Lower })
+        );
+        assert_eq!(
+            MemoryChannel::try_from(&['E', 'M', 'G', 'C', 'H']).unwrap(),
+            MemoryChannel::EmergencyChannel
+        );
+    }
+
+    #[test]
+    fn test_memory_channel_from_chars_invalid() {
+        // Negative tests
+        assert!(MemoryChannel::try_from(&['X', '0', '0', '0', '1']).is_err()); // Invalid char
+        assert!(MemoryChannel::try_from(&['P', '-', '5', '1', 'X']).is_err()); // Invalid PMS char
+        assert!(MemoryChannel::try_from(&['0', '0', 'A', '0', '1']).is_err()); // Non-digit in Memory Channel
+        assert!(MemoryChannel::try_from(&['P', '-', 'A', '0', 'L']).is_err()); // Non-digit in PMS slot number
+        assert!(MemoryChannel::try_from(&['P', '-', '5', 'A', 'L']).is_err()); // Non-digit in PMS lower/upper
+        assert!(MemoryChannel::try_from(&['X', 'M', 'G', 'C', 'H']).is_err()); // Invalid Emergency char
+    }
+
+    #[test]
+    fn test_memory_channel_from_string_valid() {
+        assert_eq!(MemoryChannel::try_from("00000".to_string()).unwrap(), MemoryChannel::VfoMtQmb);
+        assert_eq!(MemoryChannel::try_from("00001".to_string()).unwrap(), MemoryChannel::Mem(1));
+        assert_eq!(
+            MemoryChannel::try_from("P-10L".to_string()).unwrap(),
+            MemoryChannel::Pms(PmsChannel { slot: 10, lower_upper: PmsLowerUpper::Lower })
+        );
+        assert_eq!(
+            MemoryChannel::try_from("EMGCH".to_string()).unwrap(),
+            MemoryChannel::EmergencyChannel
+        );
+    }
+
+    #[test]
+    fn test_memory_channel_from_string_invalid() {
+        assert!(MemoryChannel::try_from("000000".to_string()).is_err()); // Too long
+        assert!(MemoryChannel::try_from("0001".to_string()).is_err()); // Too short
+        assert!(MemoryChannel::try_from("X0001".to_string()).is_err()); // Invalid char
+        assert!(MemoryChannel::try_from("P-51X".to_string()).is_err()); // Invalid PMS char
+        assert!(MemoryChannel::try_from("000A1".to_string()).is_err()); // Non-digit in Memory Channel
+        assert!(MemoryChannel::try_from("P-A0L".to_string()).is_err()); // Non-digit in PMS slot number
+        assert!(MemoryChannel::try_from("P-5AUL".to_string()).is_err()); // Non-digit in PMS lower/upper
+        assert!(MemoryChannel::try_from("XEMGCH".to_string()).is_err()); // Invalid Emergency char
+    }
+
+    #[test]
     fn test_frequency_hz_from_u32_valid() {
         assert!(FrequencyHz::try_from(30_000).is_ok());
         assert!(FrequencyHz::try_from(173_999_999).is_ok());
@@ -904,16 +1366,13 @@ mod tests {
 
     #[test]
     fn test_frequency_hz_from_bytes_valid() {
-        assert!(FrequencyHz::try_from("007000000".as_bytes()).is_ok());
-        assert_eq!(
-            FrequencyHz::try_from("007000000".as_bytes()).unwrap().value,
-            7_000_000
-        );
+        assert_eq!(FrequencyHz::try_from("007000000".as_bytes()).unwrap().value, 7_000_000);
     }
 
     #[test]
     fn test_frequency_hz_from_bytes_invalid() {
         assert!(FrequencyHz::try_from("00700000".as_bytes()).is_err()); // Invalid length
+        assert!(FrequencyHz::try_from("0070000000".as_bytes()).is_err()); // Invalid length
         assert!(FrequencyHz::try_from("000000001".as_bytes()).is_err()); // Invalid value
     }
 
@@ -925,12 +1384,13 @@ mod tests {
 
     #[test]
     fn test_frequency_hz_from_string_valid() {
-        assert!(FrequencyHz::try_from("007000000".to_string()).is_ok());
+        assert!(FrequencyHz::try_from("007000000".to_string()).is_ok()); // Correct length
+        assert_eq!(FrequencyHz::try_from("007000000".to_string()).unwrap().value, 7_000_000);
+        // Truncate to 9 chars
     }
 
     #[test]
     fn test_frequency_hz_from_string_invalid() {
-        assert!(FrequencyHz::try_from("0070000000".to_string()).is_err()); // Invalid length
         assert!(FrequencyHz::try_from("invalid".to_string()).is_err()); // Not a number
     }
 
@@ -950,14 +1410,8 @@ mod tests {
     #[test]
     fn test_clarifier_offset_hz_from_bytes_valid() {
         assert!(ClarifierOffsetHz::try_from("+0000".as_bytes()).is_ok());
-        assert_eq!(
-            ClarifierOffsetHz::try_from("+1234".as_bytes()).unwrap().value,
-            1234
-        );
-        assert_eq!(
-            ClarifierOffsetHz::try_from("-1234".as_bytes()).unwrap().value,
-            -1234
-        );
+        assert_eq!(ClarifierOffsetHz::try_from("+1234".as_bytes()).unwrap().value, 1234);
+        assert_eq!(ClarifierOffsetHz::try_from("-1234".as_bytes()).unwrap().value, -1234);
     }
 
     #[test]
@@ -965,6 +1419,18 @@ mod tests {
         assert!(ClarifierOffsetHz::try_from("+000".as_bytes()).is_err()); // Invalid length
         assert!(ClarifierOffsetHz::try_from("-99999".as_bytes()).is_err()); // Invalid length
         assert!(ClarifierOffsetHz::try_from("?1234".as_bytes()).is_err()); // Invalid sign
+    }
+
+    #[test]
+    fn test_mode_c4fm_roundtrip() {
+        assert_eq!(char::from(Mode::C4fmDn), 'H');
+        assert_eq!(char::from(Mode::C4fmVw), 'I');
+        assert_eq!(Mode::try_from('H'), Ok(Mode::C4fmDn));
+        assert_eq!(Mode::try_from('I'), Ok(Mode::C4fmVw));
+        assert_eq!(Mode::try_from("C4FM-DN".to_string()), Ok(Mode::C4fmDn));
+        assert_eq!(Mode::try_from("C4FM-VW".to_string()), Ok(Mode::C4fmVw));
+        assert_eq!(format!("{}", Mode::C4fmDn), "C4FM-DN");
+        assert_eq!(format!("{}", Mode::C4fmVw), "C4FM-VW");
     }
 
     #[test]
