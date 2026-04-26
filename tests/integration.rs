@@ -1,8 +1,29 @@
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Output};
 
 fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ftx1-mm"))
+}
+
+#[track_caller]
+fn assert_success(out: &Output) {
+    assert!(
+        out.status.success(),
+        "binary failed:\nexit: {}\nstdout: {}\nstderr: {}",
+        out.status,
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+#[track_caller]
+fn assert_failure(out: &Output) {
+    assert!(
+        !out.status.success(),
+        "binary unexpectedly succeeded:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
 }
 
 fn radio_port() -> String {
@@ -53,7 +74,7 @@ fn check_data_valid_file() {
         .args(["--check-data", "--file", fixture("valid.csv").to_str().unwrap()])
         .output()
         .unwrap();
-    assert!(out.status.success());
+    assert_success(&out);
     assert!(String::from_utf8_lossy(&out.stdout).contains("Data looks good!"));
 }
 
@@ -63,7 +84,7 @@ fn check_data_invalid_channel() {
         .args(["--check-data", "--file", fixture("invalid_channel.csv").to_str().unwrap()])
         .output()
         .unwrap();
-    assert!(!out.status.success());
+    assert_failure(&out);
     assert!(String::from_utf8_lossy(&out.stdout).contains("not a valid memory channel"));
 }
 
@@ -73,7 +94,7 @@ fn check_data_invalid_frequency() {
         .args(["--check-data", "--file", fixture("invalid_frequency.csv").to_str().unwrap()])
         .output()
         .unwrap();
-    assert!(!out.status.success());
+    assert_failure(&out);
     assert!(String::from_utf8_lossy(&out.stdout).contains("not valid"));
 }
 
@@ -83,7 +104,7 @@ fn check_data_invalid_mode() {
         .args(["--check-data", "--file", fixture("invalid_mode.csv").to_str().unwrap()])
         .output()
         .unwrap();
-    assert!(!out.status.success());
+    assert_failure(&out);
     assert!(String::from_utf8_lossy(&out.stdout).contains("not a valid mode"));
 }
 
@@ -93,7 +114,7 @@ fn check_data_multiple_errors() {
         .args(["--check-data", "--file", fixture("multiple_errors.csv").to_str().unwrap()])
         .output()
         .unwrap();
-    assert!(!out.status.success());
+    assert_failure(&out);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("not a valid memory channel"));
     assert!(stdout.contains("not valid"));
@@ -106,7 +127,7 @@ fn check_data_empty_file() {
         .args(["--check-data", "--file", fixture("empty.csv").to_str().unwrap()])
         .output()
         .unwrap();
-    assert!(out.status.success());
+    assert_success(&out);
     assert!(String::from_utf8_lossy(&out.stdout).contains("Total records processed: 0"));
 }
 
@@ -116,7 +137,7 @@ fn check_data_missing_file() {
         .args(["--check-data", "--file", "nonexistent_file.csv"])
         .output()
         .unwrap();
-    assert!(!out.status.success());
+    assert_failure(&out);
 }
 
 // ---------------------------------------------------------------------------
@@ -132,7 +153,7 @@ fn no_args_prints_help_hint() {
 #[test]
 fn help_flag() {
     let out = bin().arg("--help").output().unwrap();
-    assert!(out.status.success());
+    assert_success(&out);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("--read-radio"));
     assert!(stdout.contains("--write-radio"));
@@ -142,7 +163,7 @@ fn help_flag() {
 #[test]
 fn mutually_exclusive_actions() {
     let out = bin().args(["--read-radio", "--write-radio"]).output().unwrap();
-    assert!(!out.status.success());
+    assert_failure(&out);
 }
 
 // ---------------------------------------------------------------------------
@@ -155,7 +176,7 @@ fn print_valid_file() {
         .args(["--print", "--file", fixture("valid.csv").to_str().unwrap()])
         .output()
         .unwrap();
-    assert!(out.status.success());
+    assert_success(&out);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("145.000 MHz"));
     assert!(stdout.contains("HOME"));
@@ -169,7 +190,7 @@ fn print_missing_file() {
         .args(["--print", "--file", "nonexistent.csv"])
         .output()
         .unwrap();
-    assert!(!out.status.success());
+    assert_failure(&out);
 }
 
 // ---------------------------------------------------------------------------
@@ -184,12 +205,7 @@ fn read_radio_produces_csv() {
         .args(["--read-radio", "--port", &radio_port(), "--file", out_file.to_str().unwrap()])
         .output()
         .unwrap();
-    assert!(
-        out.status.success(),
-        "binary failed:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert_success(&out);
     let content = std::fs::read_to_string(&out_file).unwrap();
     assert!(content.contains("Channel Number"), "CSV header missing");
     assert!(content.lines().count() > 1, "CSV has no data rows");
@@ -206,12 +222,7 @@ fn read_radio_default_filename() {
         .current_dir(&tmp)
         .output()
         .unwrap();
-    assert!(
-        out.status.success(),
-        "binary failed:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert_success(&out);
     // stdout says "Memory data saved to CSV file: ftx1_YYYYMMDD_HHMMSS.csv"
     let stdout = String::from_utf8_lossy(&out.stdout);
     let fname = stdout
@@ -230,17 +241,17 @@ fn read_radio_default_filename() {
 #[ignore = "requires physical radio on RADIO_PORT"]
 fn read_radio_csv_passes_check_data() {
     let out_file = temp_csv("read_check");
-    let read_status = bin()
+    let read = bin()
         .args(["--read-radio", "--port", &radio_port(), "--file", out_file.to_str().unwrap()])
-        .status()
+        .output()
         .unwrap();
-    assert!(read_status.success());
+    assert_success(&read);
 
     let check = bin()
         .args(["--check-data", "--file", out_file.to_str().unwrap()])
         .output()
         .unwrap();
-    assert!(check.status.success(), "stdout: {}", String::from_utf8_lossy(&check.stdout));
+    assert_success(&check);
     let _ = std::fs::remove_file(&out_file);
 }
 
@@ -251,7 +262,7 @@ fn read_radio_wrong_port() {
         .args(["--read-radio", "--port", "/dev/nonexistent"])
         .output()
         .unwrap();
-    assert!(!out.status.success());
+    assert_failure(&out);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("Failed to open port"));
 }
@@ -268,23 +279,23 @@ fn write_radio_roundtrip() {
     let after = temp_csv("roundtrip_after");
     let port = radio_port();
 
-    let s = bin()
+    let out = bin()
         .args(["--read-radio", "--port", &port, "--file", before.to_str().unwrap()])
-        .status()
+        .output()
         .unwrap();
-    assert!(s.success(), "initial read failed");
+    assert_success(&out);
 
-    let s = bin()
+    let out = bin()
         .args(["--write-radio", "--port", &port, "--file", before.to_str().unwrap()])
-        .status()
+        .output()
         .unwrap();
-    assert!(s.success(), "write failed");
+    assert_success(&out);
 
-    let s = bin()
+    let out = bin()
         .args(["--read-radio", "--port", &port, "--file", after.to_str().unwrap()])
-        .status()
+        .output()
         .unwrap();
-    assert!(s.success(), "second read failed");
+    assert_success(&out);
 
     assert_eq!(normalise_csv(&before), normalise_csv(&after), "CSV mismatch after roundtrip");
 
@@ -300,7 +311,7 @@ fn write_radio_wrong_port() {
         .args(["--write-radio", "--port", "/dev/nonexistent", "--file", fixture("valid.csv").to_str().unwrap()])
         .output()
         .unwrap();
-    assert!(!out.status.success());
+    assert_failure(&out);
     assert!(String::from_utf8_lossy(&out.stdout).contains("Failed to open port"));
 }
 
@@ -312,5 +323,5 @@ fn write_radio_invalid_csv() {
         .args(["--write-radio", "--port", &radio_port(), "--file", fixture("invalid_channel.csv").to_str().unwrap()])
         .output()
         .unwrap();
-    assert!(!out.status.success());
+    assert_failure(&out);
 }

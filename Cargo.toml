@@ -1,6 +1,6 @@
 [package]
 name = "ftx1-mm"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Vladimir K <ew1abz@gmail.com>"]
 edition = "2021"
 description = "CLI tool for managing memory channels on Yaesu FTX-1 transceivers via CAT protocol"
@@ -9,7 +9,7 @@ repository = "https://github.com/ew1abz/yaesu-ftx-1-memory-manipulator"
 readme = "README.md"
 
 [dependencies]
-log = { version = "0.4", features = ["release_max_level_off"] }
+log = "0.4"
 env_logger = "0.11.8"
 serialport = "4.8.1"
 serde = { version = "1.0", features = ["derive"] }
