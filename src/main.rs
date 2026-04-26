@@ -463,17 +463,20 @@ fn cat_send(port: &mut dyn serialport::SerialPort, data: &[u8]) -> Result<Vec<u8
     port.write_all(data).map_err(|_| ())?;
     trace!("Sent: {:?} {:?}", String::from_utf8_lossy(data), data);
 
-    let mut buffer: Vec<u8> = vec![0; RX_BUFFER_SIZE];
+    // CAT replies end with ';'. On Linux the kernel usually delivers the whole
+    // reply in one read; on Windows the driver hands it back byte by byte, so
+    // we must accumulate until we see the terminator or actually time out.
+    let mut buffer: Vec<u8> = Vec::with_capacity(RX_BUFFER_SIZE);
+    let mut chunk: Vec<u8> = vec![0; RX_BUFFER_SIZE];
     loop {
-        match port.read(buffer.as_mut_slice()) {
+        match port.read(chunk.as_mut_slice()) {
             Ok(n) => {
-                buffer.truncate(n);
-                break;
+                buffer.extend_from_slice(&chunk[..n]);
+                if buffer.last() == Some(&b';') || buffer.len() >= RX_BUFFER_SIZE {
+                    break;
+                }
             }
-            Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {
-                buffer.truncate(0);
-                break;
-            }
+            Err(ref e) if e.kind() == io::ErrorKind::TimedOut => break,
             Err(e) => eprintln!("{:?}", e),
         }
     }
