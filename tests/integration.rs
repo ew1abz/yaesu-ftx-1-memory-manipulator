@@ -140,6 +140,37 @@ fn check_data_missing_file() {
     assert_failure(&out);
 }
 
+#[test]
+fn check_data_duplicate_frequency_warns_but_passes() {
+    let out = bin()
+        .args(["--check-data", "--file", fixture("duplicate_frequency.csv").to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("has warnings"), "expected warning banner in stdout: {stdout}");
+    assert!(stdout.contains("is also used by channel '00001'"), "expected dup-frequency warning text: {stdout}");
+    assert!(stdout.contains("Warnings: 1"), "expected warning count in summary: {stdout}");
+}
+
+#[test]
+fn check_data_no_warnings_flag_suppresses_dup_frequency() {
+    let out = bin()
+        .args([
+            "--check-data",
+            "--no-warnings",
+            "--file",
+            fixture("duplicate_frequency.csv").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.contains("has warnings"), "warnings should be suppressed: {stdout}");
+    assert!(!stdout.contains("is also used by channel"), "warnings should be suppressed: {stdout}");
+    assert!(stdout.contains("Data looks good!"), "expected clean verdict: {stdout}");
+}
+
 // ---------------------------------------------------------------------------
 // Group 2: CLI argument handling (no radio required)
 // ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ use comfy_table::{Attribute, Cell, Color, ContentArrangement, Table};
 use indicatif::ProgressBar;
 use log::{debug, error, trace};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::iter::zip;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -64,6 +64,10 @@ struct Cli {
     /// Suppress all output (progress bars, status messages, table)
     #[arg(short, long)]
     quiet: bool,
+
+    /// Disable non-blocking validation warnings (currently: duplicate-frequency detection)
+    #[arg(long)]
+    no_warnings: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -167,7 +171,7 @@ fn main() -> Result<(), ()> {
         write_radio_data(&cli, &file)?;
     } else if cli.check_data {
         let file = require_file(&cli.file, "--check-data")?;
-        check_data(&file, cli.quiet, true)?;
+        check_data(&file, cli.quiet, true, !cli.no_warnings)?;
     } else if cli.print {
         let file = require_file(&cli.file, "--print")?;
         print_table(&file, cli.plain, cli.quiet)?;
@@ -178,7 +182,7 @@ fn main() -> Result<(), ()> {
     Ok(())
 }
 
-fn check_data(file_path: &str, quiet: bool, verbose: bool) -> Result<(), ()> {
+fn check_data(file_path: &str, quiet: bool, verbose: bool, warnings_enabled: bool) -> Result<(), ()> {
     let mut rdr = csv::ReaderBuilder::new()
         .comment(Some(b'#'))
         .from_path(file_path)
@@ -187,7 +191,9 @@ fn check_data(file_path: &str, quiet: bool, verbose: bool) -> Result<(), ()> {
         })?;
     let mut valid_records = 0;
     let mut invalid_records = 0;
+    let mut warnings_count: u32 = 0;
     let mut seen_channels: HashSet<String> = HashSet::new();
+    let mut seen_frequencies: HashMap<u32, (String, Option<String>)> = HashMap::new();
     let mut duplicates_found = false;
 
     for (i, result) in rdr.deserialize().enumerate() {
@@ -209,15 +215,44 @@ fn check_data(file_path: &str, quiet: bool, verbose: bool) -> Result<(), ()> {
             duplicates_found = true;
         }
 
+        let mut warnings: Vec<String> = Vec::new();
+        if warnings_enabled {
+            match seen_frequencies.get(&record.freq) {
+                Some((prev_ch, prev_tag)) => {
+                    let prev_label = match prev_tag {
+                        Some(t) if !t.trim().is_empty() => format!("'{}' ({})", prev_ch, t.trim()),
+                        _ => format!("'{}'", prev_ch),
+                    };
+                    let cur_label = match &record.tag {
+                        Some(t) if !t.trim().is_empty() => format!(" ({})", t.trim()),
+                        _ => String::new(),
+                    };
+                    warnings.push(format!(
+                        "Frequency {} Hz{} is also used by channel {}.",
+                        record.freq, cur_label, prev_label
+                    ));
+                }
+                None => {
+                    seen_frequencies.insert(record.freq, (record.channel.clone(), record.tag.clone()));
+                }
+            }
+        }
+
         if errors.is_empty() {
             valid_records += 1;
         } else {
             invalid_records += 1;
-            if !quiet {
-                println!("Record {} is invalid:", i + 1);
-                for error in errors {
-                    println!("  - {}", error);
-                }
+        }
+        warnings_count += warnings.len() as u32;
+
+        if !quiet && (!errors.is_empty() || !warnings.is_empty()) {
+            let label = if errors.is_empty() { "has warnings" } else { "is invalid" };
+            println!("Record {} {}:", i + 1, label);
+            for error in errors {
+                println!("  - {}", error);
+            }
+            for warning in &warnings {
+                println!("  ! {}", warning);
             }
         }
     }
@@ -227,10 +262,19 @@ fn check_data(file_path: &str, quiet: bool, verbose: bool) -> Result<(), ()> {
         println!("Total records processed: {}", valid_records + invalid_records);
         println!("Valid records: {}", valid_records);
         println!("Invalid records: {}", invalid_records);
+        if warnings_count > 0 {
+            println!("Warnings: {}", warnings_count);
+        }
     }
 
     if invalid_records == 0 {
-        if verbose && !quiet { println!("\nData looks good!"); }
+        if verbose && !quiet {
+            if warnings_count > 0 {
+                println!("\nData is valid ({} warning(s) — see above).", warnings_count);
+            } else {
+                println!("\nData looks good!");
+            }
+        }
         Ok(())
     } else {
         if verbose && !quiet { println!("\nData has issues and may not be processable."); }
@@ -502,7 +546,7 @@ fn open_radio(port_name: &String, port_peed: u32, quiet: bool) -> Result<Box<dyn
 
 fn write_radio_data(cli: &Cli, file: &str) -> Result<(), ()> {
     let quiet = cli.quiet;
-    check_data(file, quiet, false)?;
+    check_data(file, quiet, false, !cli.no_warnings)?;
     let mut port = open_radio(&cli.port, cli.speed, quiet)?;
 
     let mut rdr = csv::ReaderBuilder::new()
