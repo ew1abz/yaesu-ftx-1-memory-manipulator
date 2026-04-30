@@ -54,6 +54,23 @@ ftx1-mm --print --file channels.csv
 Default port: `/dev/ttyUSB0`. Default speed: 38400 baud. Run `ftx1-mm --help`
 for all options.
 
+## Spreadsheet caveats
+
+Editing the CSV in Excel or LibreOffice is fully supported, but be aware
+that on save the spreadsheet will reformat numeric columns. The two
+visible changes:
+
+- Channel Number `00001` → `1` (leading zeros stripped)
+- CTCSS Tone `100.0` → `100` (trailing `.0` stripped)
+
+`ftx1-mm` accepts both forms — channel numbers are auto-padded to 5
+chars on read, and CTCSS tones are matched by numeric value rather than
+exact string. Just keep in mind that the file *looks* different after a
+spreadsheet round-trip; nothing is actually lost.
+
+If you want the original formatting back, re-export from the radio with
+`--read-radio` after writing your edits.
+
 ## Limitations
 
 - **Not all memory channel fields are supported.** The per-channel fields

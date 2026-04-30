@@ -154,6 +154,18 @@ fn check_data_duplicate_frequency_warns_but_passes() {
 }
 
 #[test]
+fn check_data_accepts_libreoffice_mangled_channel_numbers() {
+    let out = bin()
+        .args(["--check-data", "--file", fixture("libreoffice_mangled.csv").to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Data looks good!"), "expected lenient acceptance: {stdout}");
+    assert!(stdout.contains("Valid records: 2"), "expected both rows valid: {stdout}");
+}
+
+#[test]
 fn check_data_no_warnings_flag_suppresses_dup_frequency() {
     let out = bin()
         .args([

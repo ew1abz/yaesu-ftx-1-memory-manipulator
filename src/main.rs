@@ -197,7 +197,7 @@ fn check_data(file_path: &str, quiet: bool, verbose: bool, warnings_enabled: boo
     let mut duplicates_found = false;
 
     for (i, result) in rdr.deserialize().enumerate() {
-        let record: CsvRecord = match result {
+        let mut record: CsvRecord = match result {
             Ok(r) => r,
             Err(e) => {
                 if !quiet { println!("Error deserializing record {}: {}", i + 1, e); }
@@ -205,6 +205,7 @@ fn check_data(file_path: &str, quiet: bool, verbose: bool, warnings_enabled: boo
                 continue;
             }
         };
+        normalize_record(&mut record);
 
         let mut errors = match validate_record(&record) {
             Ok(_) => Vec::new(),
@@ -285,6 +286,18 @@ fn check_data(file_path: &str, quiet: bool, verbose: bool, warnings_enabled: boo
             );
         }
         Err(())
+    }
+}
+
+// Normalise fields a spreadsheet (LibreOffice, Excel) is likely to have
+// mangled on a save round-trip. Only the leading-zero numeric memory channel
+// format (00001–00999) is affected: spreadsheets open it as Number and strip
+// the zeros. PMS (`P-01L`), 5MHz band (`50001`), and EMGCH already survive
+// because they contain non-digits or no leading zero.
+fn normalize_record(record: &mut CsvRecord) {
+    let ch = &record.channel;
+    if (1..5).contains(&ch.len()) && ch.chars().all(|c| c.is_ascii_digit()) {
+        record.channel = format!("{:0>5}", ch);
     }
 }
 
@@ -553,7 +566,10 @@ fn write_radio_data(cli: &Cli, file: &str) -> Result<(), ()> {
         .comment(Some(b'#'))
         .from_path(file)
         .map_err(|_| ())?;
-    let records: Vec<CsvRecord> = rdr.deserialize::<CsvRecord>().filter_map(|r| r.ok()).collect();
+    let mut records: Vec<CsvRecord> = rdr.deserialize::<CsvRecord>().filter_map(|r| r.ok()).collect();
+    for r in &mut records {
+        normalize_record(r);
+    }
     if !quiet { println!("Writing memory data from CSV file: {} ({} records)... ", file, records.len()); }
     let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(records.len() as u64) };
     for rec in records {
