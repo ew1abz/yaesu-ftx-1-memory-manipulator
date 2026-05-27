@@ -54,6 +54,39 @@ ftx1-mm --print --file channels.csv
 Default port: `/dev/ttyUSB0`. Default speed: 38400 baud. Run `ftx1-mm --help`
 for all options.
 
+## Editing the CSV
+
+**Channel numbering.** Channels don't have to be contiguous. Skip any
+numbers you want to leave open for future use — the validator ignores
+the gap, the radio leaves untouched slots untouched on write. Lines
+starting with `#` are also skipped, so you can use them as section
+dividers in the spreadsheet view:
+
+```text
+# --- 2 m repeaters ---
+00050,...
+00051,...
+
+# --- 70 cm repeaters ---
+00100,...
+```
+
+**Squelch Type names.** The CSV uses the internal enum names rather
+than the radio's front-panel labels. Quick reference:
+
+| Radio UI | CSV value     | Meaning                            |
+| :------: | :------------ | :--------------------------------- |
+|   OFF    | `CtcssOff`    | No tone squelch                    |
+|   TONE   | `CtcssEnc`    | Encode only (TX tone, no RX gate)  |
+|   TSQ    | `CtcssEncDec` | Encode + decode (tone squelch)     |
+|   DCS    | `Dcs`         | Digital code squelch               |
+
+**Shift values.** `Simplex`, `PlusShift`, `MinusShift` use the per-band
+offset menu setting. `Ars` lets the radio pick direction and offset
+from its built-in band plan — useful where the per-band default
+doesn't match local convention. For a fully custom TX frequency,
+set `Split TX (Hz)` to the exact transmit frequency instead.
+
 ## Spreadsheet caveats
 
 Editing the CSV in Excel or LibreOffice is fully supported, but be aware
@@ -76,12 +109,20 @@ If you want the original formatting back, re-export from the radio with
 - **Not all memory channel fields are supported.** The per-channel fields
   currently round-tripped are listed in
   [doc/memory-channel-fields.md](doc/memory-channel-fields.md). Notably
-  unsupported: split TX frequency (`MZ`), Memory Group (M-GRP), and the
-  actual repeater offset in Hz (per-band menu setting, not per-channel).
+  unsupported: Memory Group (M-GRP) and the per-band repeater-offset Hz
+  (a menu setting, not per-channel — use `Split TX (Hz)` instead when you
+  need a non-standard offset).
 - **Radio settings are not touched.** This tool only reads and writes
   memory channels. Global/per-band/per-side settings — IPO/pre-amp, DNR,
   DNF, narrow filter, RF attenuator, noise blanker, AGC, band repeater
   offsets, menu (`EX`) parameters — are out of scope.
+- **Speech EQ / Compressor are not per-channel.** The CAT spec exposes
+  them as radio-global settings, not per memory slot, so a CSV can't
+  store them. Set them once on the radio and they apply across channels.
+- **No CAT command to delete a channel.** The radio doesn't expose
+  channel clearing over CAT. Writing a CSV only programs the channels
+  it contains; existing channels not in the CSV are left untouched. To
+  clear a slot, use the radio's front panel.
 
 ---
 
