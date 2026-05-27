@@ -13,7 +13,7 @@ mod ftx1;
 use ftx1::*;
 
 const RX_BUFFER_SIZE: usize = 255;
-const CHANNELS: u16 = 100;
+const CHANNELS: u16 = 999;
 
 /// A simple program to interact with Yaesu FT-DX1 series radios
 #[derive(Parser, Debug)]
@@ -434,20 +434,29 @@ fn read_radio_data(cli: &Cli) -> Result<(), ()> {
     }
     bar.finish();
 
+    // Pre-compute the per-channel numeric ids from the MR results. Earlier
+    // versions iterated 1..=memory_list.len() which silently broke when the
+    // programmed channels weren't contiguous starting at 1 (tags landed on
+    // the wrong rows). This pulls the real channel number out of each MR
+    // response so the secondary lookups can't go out of sync.
+    let channel_numbers: Vec<u16> = memory_list
+        .iter()
+        .filter_map(|m| if let MemoryChannel::Mem(n) = &m.channel { Some(*n) } else { None })
+        .collect();
+
     if !quiet { println!("Reading memory tags..."); }
-    let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(memory_list.len() as u64) };
+    let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(channel_numbers.len() as u64) };
     let mut tag_list: Vec<Option<String>> = Vec::new();
-    for ch in 1..=memory_list.len() as u16 {
+    for &ch in &channel_numbers {
         bar.inc(1);
-        let tag = read_tag(&mut *port, ch);
-        tag_list.push(tag);
+        tag_list.push(read_tag(&mut *port, ch));
     }
     bar.finish();
 
     if !quiet { println!("Reading tone info..."); }
-    let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(memory_list.len() as u64) };
+    let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(channel_numbers.len() as u64) };
     let mut tone_list: Vec<(ToneCode, ToneCode)> = Vec::new();
-    for ch in 1..=memory_list.len() as u16 {
+    for &ch in &channel_numbers {
         bar.inc(1);
         // There is no answer for this command, so we ignore the result
         let _ = cat_send(&mut *port, &CMD_MC.set(Side::Sub, MemoryChannel::Mem(ch)))?;
@@ -459,9 +468,9 @@ fn read_radio_data(cli: &Cli) -> Result<(), ()> {
     }
 
     if !quiet { println!("Reading split memory info..."); }
-    let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(memory_list.len() as u64) };
+    let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(channel_numbers.len() as u64) };
     let mut split_list: Vec<Option<u32>> = Vec::new();
-    for ch in 1..=memory_list.len() as u16 {
+    for &ch in &channel_numbers {
         bar.inc(1);
         split_list.push(read_split(&mut *port, ch));
     }
