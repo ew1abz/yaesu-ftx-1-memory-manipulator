@@ -328,25 +328,9 @@ fn validate_record(record: &CsvRecord) -> Result<(), Vec<String>> {
         ));
     }
 
-    // Validate mode
-    const VALID_MODES: &[&str] = &[
-        "LSB",
-        "USB",
-        "CW-U",
-        "FM",
-        "AM",
-        "RTTY-L",
-        "CW-L",
-        "DATA-L",
-        "RTTY-U",
-        "DATA-FM",
-        "FM-N",
-        "DATA-U",
-        "AM-N",
-        "PSK",
-        "DATA-FM-N",
-    ];
-    if !VALID_MODES.contains(&record.mode.as_str()) {
+    // Validate mode via the canonical Mode::try_from rather than a duplicated
+    // allowlist, so check_data never drifts from what MemoryReadWrite accepts.
+    if Mode::try_from(record.mode.clone()).is_err() {
         errors.push(format!("Mode '{}' is not a valid mode.", record.mode));
     }
 
