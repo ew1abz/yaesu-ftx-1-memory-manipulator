@@ -396,13 +396,23 @@ impl fmt::Display for MemoryChannel {
 //------------------------------------
 // Shift
 //------------------------------------
-// [0: Simplex 1: Plus Shift 2: Minus Shift]
-
+// CAT OS command: [0: Simplex, 1: Plus Shift, 2: Minus Shift, 3: ARS]
+//
+// ARS (Automatic Repeater Shift) lets the radio pick both direction and
+// offset Hz from its built-in band plan. Useful where the per-band offset
+// menu setting doesn't match local convention (e.g. PL 70cm uses 7.6 MHz,
+// not the 5 MHz default).
+//
+// Note: MR/MW only encode Simplex/Plus/Minus (P10 in their spec, no ARS
+// value). Reading a channel back will return the direction ARS resolved
+// to, not "Ars". To write a channel as ARS we send OS with P2=3 between
+// MW and AM in the write sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Shift {
     Simplex = 0x00,
     PlusShift = 0x01,
     MinusShift = 0x02,
+    Ars = 0x03,
 }
 
 impl TryFrom<char> for Shift {
@@ -413,6 +423,7 @@ impl TryFrom<char> for Shift {
             '0' => Ok(Self::Simplex),
             '1' => Ok(Self::PlusShift),
             '2' => Ok(Self::MinusShift),
+            '3' => Ok(Self::Ars),
             _ => Err(()),
         }
     }
@@ -424,6 +435,7 @@ impl fmt::Display for Shift {
             Shift::Simplex => write!(f, "SIMPLEX"),
             Shift::PlusShift => write!(f, "PLUS SHIFT"),
             Shift::MinusShift => write!(f, "MINUS SHIFT"),
+            Shift::Ars => write!(f, "ARS"),
         }
     }
 }
@@ -434,6 +446,20 @@ impl From<Shift> for char {
             Shift::Simplex => '0',
             Shift::PlusShift => '1',
             Shift::MinusShift => '2',
+            Shift::Ars => '3',
+        }
+    }
+}
+
+impl Shift {
+    /// MW P10 only accepts 0/1/2 per the CAT spec — Ars is not a valid
+    /// value there. Returns Simplex when the shift is Ars, because the
+    /// MW step is a placeholder that AM overwrites later in the write
+    /// sequence (OS with the real Ars value runs in between).
+    pub fn to_mw_char(self) -> char {
+        match self {
+            Shift::Ars => '0',
+            other => other.into(),
         }
     }
 }
@@ -1084,7 +1110,7 @@ impl CmdMw<'_> {
         buffer.append(&mut vec![mw.ch_type.into()]);
         buffer.append(&mut vec![mw.sql_type.into()]);
         buffer.append(&mut vec!['0', '0']); // fixed per CAT spec
-        buffer.append(&mut vec![mw.shift.into()]);
+        buffer.append(&mut vec![mw.shift.to_mw_char()]);
         Ok(Cmd::tx_buffer(&self.cmd, Some(buffer)))
     }
 }
@@ -1431,6 +1457,23 @@ mod tests {
         assert_eq!(Mode::try_from("C4FM-VW".to_string()), Ok(Mode::C4fmVw));
         assert_eq!(format!("{}", Mode::C4fmDn), "C4FM-DN");
         assert_eq!(format!("{}", Mode::C4fmVw), "C4FM-VW");
+    }
+
+    #[test]
+    fn test_shift_ars_roundtrip() {
+        // Char encoding for the OS command — 3 means ARS.
+        assert_eq!(char::from(Shift::Ars), '3');
+        assert_eq!(Shift::try_from('3'), Ok(Shift::Ars));
+        // Display string used in tables and the CSV column.
+        assert_eq!(format!("{}", Shift::Ars), "ARS");
+        // MW P10 doesn't accept ARS — must clamp to a documented value
+        // (Simplex). The OS+AM step in the write sequence sets the real
+        // Ars after this placeholder.
+        assert_eq!(Shift::Ars.to_mw_char(), '0');
+        // Non-Ars values pass through to_mw_char unchanged.
+        assert_eq!(Shift::Simplex.to_mw_char(), '0');
+        assert_eq!(Shift::PlusShift.to_mw_char(), '1');
+        assert_eq!(Shift::MinusShift.to_mw_char(), '2');
     }
 
     #[test]
