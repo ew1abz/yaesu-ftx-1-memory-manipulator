@@ -18,8 +18,8 @@ Status of all fields that can be associated with a memory channel.
 | DCS Code | ✅ | `CMD_CN` | 104 codes |
 | Memory Channel Tag | ✅ | `CMD_MT` | Up to 12 ASCII characters |
 | Memory Group (M-GRP) | ❌ | — | Per-channel boolean; marks a channel as part of the user-defined M-GRP recall group. Band groups (M-HF, 50MHz, M-AIR, M-VHF, M-UHF) are automatic from frequency. Absent from CAT spec (`CMD_MR`/`CMD_MW`); likely in uncharted bytes `[26..27]`, or via an undocumented CAT command — a USB trace of RT-Systems would clarify |
-| ARS (Auto Repeater Shift) | ❌ | — | Per-band; part of `OS` P2=3 and EX/MENU RPT SHIFT |
-| Split TX Frequency | ❌ | `MZ` | Per-channel via `MZ` command; not returned by `CMD_MR` |
+| ARS (Auto Repeater Shift) | ✅ | `OS` P2=3 | Stored on write via `Shift::Ars` in the CSV. Reads return whichever direction ARS resolved to (`MR` doesn't carry the ARS flag), so round-tripping an ARS channel surfaces as Plus or Minus |
+| Split TX Frequency | ✅ | `MZ` | Stored via the optional `Split TX (Hz)` CSV column. Read path queries `MZ` per channel; write path sends `MZ` after the AM commit |
 | IPO / Pre-Amp | ❌ | — | Per-band group (HF/50 MHz, VHF, UHF) via `PA`; not per channel |
 | DNF (Auto Notch) | ❌ | — | Per-side (MAIN/SUB) via `BC`; not stored per channel |
 | DNR (Noise Reduction level) | ❌ | — | Per-side (MAIN/SUB) via `RL`; not stored per channel |

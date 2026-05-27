@@ -1116,6 +1116,67 @@ impl CmdMw<'_> {
 }
 
 //------------------------------------
+// MZ - SPLIT MEMORY
+//
+// Stores a per-channel TX frequency independent of the channel's RX
+// frequency / repeater-shift settings. Useful when the band-plan ARS
+// and per-band offset menu can't express the local convention (e.g.
+// a non-standard cross-band repeater).
+//
+// Wire format:
+//   Set : MZ ccccc s fffffffff ;
+//   Read: MZ ccccc ;          → MZ ccccc s fffffffff ;
+//     ccccc — 5-char channel id (memory or PMS)
+//     s     — '0' = SPLIT off, '1' = SPLIT on
+//     fffff... — 9-char TX frequency in Hz
+//------------------------------------
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MzReply {
+    pub channel: MemoryChannel,
+    pub split_on: bool,
+    pub tx_frequency_hz: FrequencyHz,
+}
+
+pub struct CmdMz<'a> {
+    cmd: Cmd<'a>,
+}
+
+pub const CMD_MZ: CmdMz<'static> = CmdMz { cmd: Cmd { code: &['M', 'Z'], read_params: 15 } };
+
+impl CmdMz<'_> {
+    pub fn read(&self, ch: MemoryChannel) -> Vec<u8> {
+        let s = ch.to_chars().unwrap();
+        Cmd::tx_buffer(&self.cmd, Some(s.to_vec()))
+    }
+
+    pub fn decode(&self, buffer: &[u8]) -> Result<MzReply, ()> {
+        Cmd::is_reply_ok(&self.cmd, buffer)?;
+        let chars: [char; 5] = [
+            buffer[2] as char, buffer[3] as char, buffer[4] as char,
+            buffer[5] as char, buffer[6] as char,
+        ];
+        let channel = MemoryChannel::try_from(&chars)?;
+        let split_on = match buffer[7] as char {
+            '0' => false,
+            '1' => true,
+            _ => return Err(()),
+        };
+        let tx_frequency_hz = FrequencyHz::try_from(&buffer[8..17])?;
+        Ok(MzReply { channel, split_on, tx_frequency_hz })
+    }
+
+    pub fn set(&self, ch: MemoryChannel, split_on: bool, tx_freq: FrequencyHz) -> Result<Vec<u8>, ()> {
+        let mut buffer = Vec::<char>::new();
+        buffer.append(ch.to_chars()?.to_vec().as_mut());
+        buffer.push(if split_on { '1' } else { '0' });
+        let freq_str: String = tx_freq.into();
+        buffer.append(freq_str.chars().collect::<Vec<char>>().as_mut());
+        Ok(Cmd::tx_buffer(&self.cmd, Some(buffer)))
+    }
+}
+
+//------------------------------------
 // BM - VFO SUB-SIDE TO MEMORY CHANNEL
 //------------------------------------
 pub struct CmdBm<'a> {
@@ -1457,6 +1518,53 @@ mod tests {
         assert_eq!(Mode::try_from("C4FM-VW".to_string()), Ok(Mode::C4fmVw));
         assert_eq!(format!("{}", Mode::C4fmDn), "C4FM-DN");
         assert_eq!(format!("{}", Mode::C4fmVw), "C4FM-VW");
+    }
+
+    #[test]
+    fn test_cmd_mz_set_wire_format() {
+        let ch = MemoryChannel::Mem(19);
+        let tx = FrequencyHz::try_from(431_400_000u32).unwrap();
+        let buf = CMD_MZ.set(ch, true, tx).unwrap();
+        // MZ + 5-char channel + '1' (split on) + 9-char freq + ';'
+        assert_eq!(buf.as_slice(), b"MZ000191431400000;");
+    }
+
+    #[test]
+    fn test_cmd_mz_set_split_off_wire_format() {
+        let ch = MemoryChannel::Mem(20);
+        let tx = FrequencyHz::try_from(146_940_000u32).unwrap();
+        let buf = CMD_MZ.set(ch, false, tx).unwrap();
+        assert_eq!(buf.as_slice(), b"MZ000200146940000;");
+    }
+
+    #[test]
+    fn test_cmd_mz_read_wire_format() {
+        let ch = MemoryChannel::Mem(19);
+        let buf = CMD_MZ.read(ch);
+        assert_eq!(buf.as_slice(), b"MZ00019;");
+    }
+
+    #[test]
+    fn test_cmd_mz_decode_split_on() {
+        let reply = CMD_MZ.decode(b"MZ000191431400000;").unwrap();
+        assert_eq!(reply.channel, MemoryChannel::Mem(19));
+        assert!(reply.split_on);
+        assert_eq!(reply.tx_frequency_hz.to_u32(), 431_400_000);
+    }
+
+    #[test]
+    fn test_cmd_mz_decode_split_off() {
+        let reply = CMD_MZ.decode(b"MZ000200146940000;").unwrap();
+        assert_eq!(reply.channel, MemoryChannel::Mem(20));
+        assert!(!reply.split_on);
+    }
+
+    #[test]
+    fn test_cmd_mz_decode_rejects_malformed() {
+        // Bad split flag (not '0' or '1')
+        assert!(CMD_MZ.decode(b"MZ00019X431400000;").is_err());
+        // Out-of-range frequency (too low)
+        assert!(CMD_MZ.decode(b"MZ000191000010000;").is_err());
     }
 
     #[test]

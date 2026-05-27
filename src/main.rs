@@ -96,6 +96,10 @@ struct CsvRecord {
     ctcss_tone: String,
     #[serde(rename = "DCS Tone")]
     dcs_tone: String,
+    /// Optional split-memory TX frequency. Empty cell or missing column = no
+    /// split (TX = RX). Set to a Hz value to enable per-channel split via MZ.
+    #[serde(rename = "Split TX (Hz)", default)]
+    tx_frequency_hz: Option<u32>,
 }
 
 impl TryFrom<CsvRecord> for MemoryReadWrite {
@@ -357,7 +361,7 @@ fn print_table(file_path: &str, plain: bool, quiet: bool) -> Result<(), ()> {
             .set_content_arrangement(ContentArrangement::Dynamic);
     }
 
-    let headers = ["Ch", "Frequency", "Tag", "Mode", "Type", "Squelch", "Shift", "Clar (Hz)", "RX Clar", "TX Clar", "CTCSS", "DCS"];
+    let headers = ["Ch", "Frequency", "Tag", "Mode", "Type", "Squelch", "Shift", "Clar (Hz)", "RX Clar", "TX Clar", "CTCSS", "DCS", "Split TX"];
     table.set_header(headers.iter().map(|h| {
         if plain {
             Cell::new(h)
@@ -402,6 +406,10 @@ fn print_table(file_path: &str, plain: bool, quiet: bool) -> Result<(), ()> {
             make(r.tx_clarifier_enabled.to_string(), if tx_clar_on { Color::Green } else { Color::DarkGrey }),
             make(r.ctcss_tone,                                                       Color::DarkGrey),
             make(r.dcs_tone,                                                         Color::DarkGrey),
+            match r.tx_frequency_hz {
+                Some(hz) => make(format!("{:.3} MHz", hz as f64 / 1_000_000.0),      Color::Magenta),
+                None     => make(String::new(),                                      Color::DarkGrey),
+            },
         ]);
     }
     println!("{table}");
@@ -450,8 +458,17 @@ fn read_radio_data(cli: &Cli) -> Result<(), ()> {
         tone_list.push((ctcss_tone_decoded.tone_code, dcs_tone_decoded.tone_code));
     }
 
-    // Combine memory data, tags and tones into CSV records
-    for (m, (tag, tone)) in zip(memory_list, zip(tag_list, tone_list)) {
+    if !quiet { println!("Reading split memory info..."); }
+    let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(memory_list.len() as u64) };
+    let mut split_list: Vec<Option<u32>> = Vec::new();
+    for ch in 1..=memory_list.len() as u16 {
+        bar.inc(1);
+        split_list.push(read_split(&mut *port, ch));
+    }
+    bar.finish();
+
+    // Combine memory data, tags, tones and split memory into CSV records
+    for (m, ((tag, tone), tx)) in zip(memory_list, zip(zip(tag_list, tone_list), split_list)) {
         let rec = CsvRecord {
             channel: m.channel.to_string()?,
             tag,
@@ -465,6 +482,7 @@ fn read_radio_data(cli: &Cli) -> Result<(), ()> {
             shift: m.shift,
             ctcss_tone: CmdCn::tone_code_to_string(ToneType::Ctcss, tone.0)?,
             dcs_tone: CmdCn::tone_code_to_string(ToneType::Dcs, tone.1)?,
+            tx_frequency_hz: tx,
         };
         // println!("{:?}", rec);
         wtr.serialize(&rec).unwrap();
@@ -498,6 +516,14 @@ fn read_tag(port: &mut dyn serialport::SerialPort, ch: u16) -> Option<String> {
         Err(e) => error!("Error: {:?}", e),
     }
     d.ok()
+}
+
+// Returns Some(tx_freq_hz) only when split memory is enabled on the channel.
+// None means split is off (TX = RX) or the channel couldn't be read.
+fn read_split(port: &mut dyn serialport::SerialPort, ch: u16) -> Option<u32> {
+    let rx = cat_send(port, &CMD_MZ.read(MemoryChannel::Mem(ch))).ok()?;
+    let reply = CMD_MZ.decode(&rx).ok()?;
+    if reply.split_on { Some(reply.tx_frequency_hz.to_u32()) } else { None }
 }
 
 fn cat_send(port: &mut dyn serialport::SerialPort, data: &[u8]) -> Result<Vec<u8>, ()> {
@@ -584,8 +610,16 @@ fn write_radio_data(cli: &Cli, file: &str) -> Result<(), ()> {
         let _ = cat_send(&mut *port, &CMD_AM.save())?;
         if let Some(tag) = rec.tag {
             debug!("Writing tag for channel: {:?}, tag: {:?}", mem.channel, tag);
-            let _ = cat_send(&mut *port, &CMD_MT.set(mem.channel, tag)?)?;
+            let _ = cat_send(&mut *port, &CMD_MT.set(mem.channel.clone(), tag)?)?;
         }
+        // Split memory: enable with the explicit TX freq when set, or
+        // explicitly disable so a re-import correctly clears prior split state.
+        // P3 is required even when P2=0; reuse the RX freq as a valid placeholder.
+        let (split_on, tx_freq) = match rec.tx_frequency_hz {
+            Some(hz) => (true, FrequencyHz::try_from(hz)?),
+            None => (false, mem.frequency_hz),
+        };
+        let _ = cat_send(&mut *port, &CMD_MZ.set(mem.channel, split_on, tx_freq)?)?;
     }
     bar.finish();
     if !quiet { println!("Memory data written to radio."); }
