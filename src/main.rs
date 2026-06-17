@@ -68,6 +68,13 @@ struct Cli {
     /// Disable non-blocking validation warnings (currently: duplicate-frequency detection)
     #[arg(long)]
     no_warnings: bool,
+
+    /// Accept frequencies outside the FTX-1's documented receiver coverage
+    /// (30 kHz–174 MHz, 400–470 MHz). Useful for MARS-CAP-modified radios
+    /// programming SATCOM or the 174–400 MHz gap. The radio will still
+    /// reject anything it can't actually tune.
+    #[arg(long)]
+    allow_any_frequency: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -175,7 +182,7 @@ fn main() -> Result<(), ()> {
         write_radio_data(&cli, &file)?;
     } else if cli.check_data {
         let file = require_file(&cli.file, "--check-data")?;
-        check_data(&file, cli.quiet, true, !cli.no_warnings)?;
+        check_data(&file, cli.quiet, true, !cli.no_warnings, cli.allow_any_frequency)?;
     } else if cli.print {
         let file = require_file(&cli.file, "--print")?;
         print_table(&file, cli.plain, cli.quiet)?;
@@ -186,7 +193,7 @@ fn main() -> Result<(), ()> {
     Ok(())
 }
 
-fn check_data(file_path: &str, quiet: bool, verbose: bool, warnings_enabled: bool) -> Result<(), ()> {
+fn check_data(file_path: &str, quiet: bool, verbose: bool, warnings_enabled: bool, allow_any_frequency: bool) -> Result<(), ()> {
     let mut rdr = csv::ReaderBuilder::new()
         .comment(Some(b'#'))
         .from_path(file_path)
@@ -211,7 +218,7 @@ fn check_data(file_path: &str, quiet: bool, verbose: bool, warnings_enabled: boo
         };
         normalize_record(&mut record);
 
-        let mut errors = match validate_record(&record) {
+        let mut errors = match validate_record(&record, allow_any_frequency) {
             Ok(_) => Vec::new(),
             Err(e) => e,
         };
@@ -305,7 +312,7 @@ fn normalize_record(record: &mut CsvRecord) {
     }
 }
 
-fn validate_record(record: &CsvRecord) -> Result<(), Vec<String>> {
+fn validate_record(record: &CsvRecord, allow_any_frequency: bool) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
 
     // Validate channel
@@ -319,9 +326,16 @@ fn validate_record(record: &CsvRecord) -> Result<(), Vec<String>> {
         }
     }
 
-    // Validate frequency
-    if FrequencyHz::try_from(record.freq).is_err() {
-        errors.push(format!("Frequency '{}' is not valid.", record.freq));
+    // Validate frequency. The type-level check enforces the 9-char wire-format
+    // limit; the radio-coverage range check is gated by --allow-any-frequency
+    // so MARS-CAP units can program out-of-band channels.
+    match FrequencyHz::try_from(record.freq) {
+        Err(_) => errors.push(format!("Frequency '{}' is not valid.", record.freq)),
+        Ok(f) if !allow_any_frequency && !f.is_in_radio_range() => errors.push(format!(
+            "Frequency '{}' is not valid: outside the radio's documented coverage (30 kHz\u{2013}174 MHz, 400\u{2013}470 MHz). Pass --allow-any-frequency for MARS-CAP units.",
+            record.freq
+        )),
+        Ok(_) => {}
     }
 
     // Validate clarifier offset: 0000 - 9990 (Hz)
@@ -578,7 +592,7 @@ fn open_radio(port_name: &String, port_peed: u32, quiet: bool) -> Result<Box<dyn
 
 fn write_radio_data(cli: &Cli, file: &str) -> Result<(), ()> {
     let quiet = cli.quiet;
-    check_data(file, quiet, false, !cli.no_warnings)?;
+    check_data(file, quiet, false, !cli.no_warnings, cli.allow_any_frequency)?;
     let mut port = open_radio(&cli.port, cli.speed, quiet)?;
 
     let mut rdr = csv::ReaderBuilder::new()

@@ -177,6 +177,34 @@ fn check_data_accepts_split_memory_column() {
 }
 
 #[test]
+fn check_data_rejects_out_of_band_frequency_by_default() {
+    let out = bin()
+        .args(["--check-data", "--file", fixture("out_of_band_frequency.csv").to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_failure(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("outside the radio's documented coverage"), "expected policy error: {stdout}");
+    assert!(stdout.contains("--allow-any-frequency"), "expected pointer to the flag: {stdout}");
+}
+
+#[test]
+fn check_data_allows_out_of_band_frequency_with_flag() {
+    let out = bin()
+        .args([
+            "--check-data",
+            "--allow-any-frequency",
+            "--file",
+            fixture("out_of_band_frequency.csv").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Data looks good!"), "expected clean verdict: {stdout}");
+}
+
+#[test]
 fn check_data_no_warnings_flag_suppresses_dup_frequency() {
     let out = bin()
         .args([

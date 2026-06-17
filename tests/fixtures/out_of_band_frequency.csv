@@ -1,0 +1,2 @@
+Channel Number,Frequency (Hz),Memory Tag,Mode,Channel Type,Squelch Type,Shift (Hz),Clarifier Offset (Hz),Rx Clarifier Enabled,Tx Clarifier Enabled,CTCSS Tone,DCS Tone
+00100,255250000,SATCOM      ,FM,MemoryChannel,CtcssOff,Simplex,0,RxClarifierOff,TxClarifierOff,100.0,23

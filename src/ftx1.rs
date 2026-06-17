@@ -22,14 +22,26 @@ impl FrequencyHz {
     pub fn to_u32(&self) -> u32 {
         self.value
     }
+
+    /// True when the frequency falls inside the FTX-1's documented stock
+    /// receiver coverage (30 kHz–174 MHz, 400–470 MHz). Used as a soft
+    /// validation check — `--allow-any-frequency` bypasses it so users with
+    /// MARS-CAP-modified radios can program out-of-band channels (SATCOM,
+    /// 174–400 MHz gap, etc.).
+    pub fn is_in_radio_range(&self) -> bool {
+        (30_000..174_000_000).contains(&self.value)
+            || (400_000_000..470_000_000).contains(&self.value)
+    }
 }
 
 impl TryFrom<u32> for FrequencyHz {
     type Error = ();
 
     fn try_from(item: u32) -> Result<Self, Self::Error> {
-        // 30kHz - 174MHz, 400MHz - 470MHz
-        if (30_000..174_000_000).contains(&item) || (400_000_000..470_000_000).contains(&item) {
+        // Only enforces the 9-char wire-format upper bound. Range policy
+        // (radio coverage) lives in is_in_radio_range and is enforced at
+        // the validation layer, where it can be bypassed by CLI flag.
+        if item < 1_000_000_000 {
             Ok(FrequencyHz { value: item })
         } else {
             Err(())
@@ -1436,19 +1448,31 @@ mod tests {
     }
 
     #[test]
-    fn test_frequency_hz_from_u32_valid() {
+    fn test_frequency_hz_from_u32_accepts_any_9_digit() {
+        // try_from now only enforces the 9-char wire-format limit; radio
+        // coverage is checked separately via is_in_radio_range.
         assert!(FrequencyHz::try_from(30_000).is_ok());
         assert!(FrequencyHz::try_from(173_999_999).is_ok());
         assert!(FrequencyHz::try_from(400_000_000).is_ok());
         assert!(FrequencyHz::try_from(469_999_999).is_ok());
+        // Previously rejected (outside radio range), now accepted at the
+        // type level so MARS-CAP / SATCOM use cases can express them.
+        assert!(FrequencyHz::try_from(29_999).is_ok());
+        assert!(FrequencyHz::try_from(255_250_000).is_ok()); // SATCOM band
+        assert!(FrequencyHz::try_from(0).is_ok());
+        // Still rejected: doesn't fit in 9-char wire format.
+        assert!(FrequencyHz::try_from(1_000_000_000).is_err());
     }
 
     #[test]
-    fn test_frequency_hz_from_u32_invalid() {
-        assert!(FrequencyHz::try_from(29_999).is_err());
-        assert!(FrequencyHz::try_from(174_000_000).is_err());
-        assert!(FrequencyHz::try_from(399_999_999).is_err());
-        assert!(FrequencyHz::try_from(470_000_000).is_err());
+    fn test_frequency_hz_is_in_radio_range() {
+        assert!(FrequencyHz::try_from(30_000).unwrap().is_in_radio_range());
+        assert!(FrequencyHz::try_from(146_940_000).unwrap().is_in_radio_range());
+        assert!(FrequencyHz::try_from(469_999_999).unwrap().is_in_radio_range());
+        // Outside stock receiver coverage — needs --allow-any-frequency.
+        assert!(!FrequencyHz::try_from(29_999).unwrap().is_in_radio_range());
+        assert!(!FrequencyHz::try_from(255_250_000).unwrap().is_in_radio_range());
+        assert!(!FrequencyHz::try_from(174_000_000).unwrap().is_in_radio_range());
     }
 
     #[test]
@@ -1460,7 +1484,9 @@ mod tests {
     fn test_frequency_hz_from_bytes_invalid() {
         assert!(FrequencyHz::try_from("00700000".as_bytes()).is_err()); // Invalid length
         assert!(FrequencyHz::try_from("0070000000".as_bytes()).is_err()); // Invalid length
-        assert!(FrequencyHz::try_from("000000001".as_bytes()).is_err()); // Invalid value
+        // "000000001" used to be rejected as out-of-range; now accepted, since
+        // type-level validation is wire-format only.
+        assert_eq!(FrequencyHz::try_from("000000001".as_bytes()).unwrap().value, 1);
     }
 
     #[test]
@@ -1563,8 +1589,8 @@ mod tests {
     fn test_cmd_mz_decode_rejects_malformed() {
         // Bad split flag (not '0' or '1')
         assert!(CMD_MZ.decode(b"MZ00019X431400000;").is_err());
-        // Out-of-range frequency (too low)
-        assert!(CMD_MZ.decode(b"MZ000191000010000;").is_err());
+        // Non-digit in the 9-char frequency field
+        assert!(CMD_MZ.decode(b"MZ000191ABCDEFGHI;").is_err());
     }
 
     #[test]
