@@ -535,30 +535,37 @@ impl From<SqlType> for char {
 // Mode
 //------------------------------------
 
+// Mode byte values per the CAT MD spec, plus one observed-but-undocumented:
+//   0:W-FM (documented as '-' but the radio actually uses '0' for wide-FM
+//          broadcast channels — verified empirically against a programmed slot)
+//   1:LSB 2:USB 3:CW-U 4:FM 5:AM 6:RTTY-L 7:CW-L 8:DATA-L 9:RTTY-U
+//   A:DATA-FM B:FM-N C:DATA-U D:AM-N E:PSK F:DATA-FM-N H:C4FM-DN I:C4FM-VW
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Mode {
-    Lsb = 0x01,
-    Usb = 0x02,
-    CwU = 0x03,
-    Fm = 0x04,
-    Am = 0x05,
-    RttyL = 0x06,
-    CwL = 0x07,
-    DataL = 0x08,
-    RttyU = 0x09,
-    DataFm = 0x0a,
-    FmN = 0x0b,
-    DataU = 0x0c,
-    AmN = 0x0d,
-    Psk = 0x0e,
-    DataFmN = 0x0f,
-    C4fmDn = 0x11,
-    C4fmVw = 0x12,
+    Wfm,
+    Lsb,
+    Usb,
+    CwU,
+    Fm,
+    Am,
+    RttyL,
+    CwL,
+    DataL,
+    RttyU,
+    DataFm,
+    FmN,
+    DataU,
+    AmN,
+    Psk,
+    DataFmN,
+    C4fmDn,
+    C4fmVw,
 }
 
 impl From<Mode> for char {
     fn from(item: Mode) -> Self {
         match item {
+            Mode::Wfm => '0',
             Mode::Lsb => '1',
             Mode::Usb => '2',
             Mode::CwU => '3',
@@ -585,6 +592,7 @@ impl TryFrom<char> for Mode {
 
     fn try_from(item: char) -> Result<Self, Self::Error> {
         match item {
+            '0' => Ok(Self::Wfm),
             '1' => Ok(Self::Lsb),
             '2' => Ok(Self::Usb),
             '3' => Ok(Self::CwU),
@@ -618,6 +626,7 @@ impl TryFrom<u8> for Mode {
 impl fmt::Display for Mode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Mode::Wfm => write!(f, "W-FM"),
             Mode::Lsb => write!(f, "LSB"),
             Mode::Usb => write!(f, "USB"),
             Mode::CwU => write!(f, "CW-U"),
@@ -644,6 +653,7 @@ impl TryFrom<String> for Mode {
 
     fn try_from(item: String) -> Result<Self, Self::Error> {
         match item.as_str() {
+            "W-FM" => Ok(Self::Wfm),
             "LSB" => Ok(Self::Lsb),
             "USB" => Ok(Self::Usb),
             "CW-U" => Ok(Self::CwU),
