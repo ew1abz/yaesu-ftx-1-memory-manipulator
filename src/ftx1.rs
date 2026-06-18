@@ -22,14 +22,26 @@ impl FrequencyHz {
     pub fn to_u32(&self) -> u32 {
         self.value
     }
+
+    /// True when the frequency falls inside the FTX-1's documented stock
+    /// receiver coverage (30 kHz–174 MHz, 400–470 MHz). Used as a soft
+    /// validation check — `--allow-any-frequency` bypasses it so users with
+    /// MARS-CAP-modified radios can program out-of-band channels (SATCOM,
+    /// 174–400 MHz gap, etc.).
+    pub fn is_in_radio_range(&self) -> bool {
+        (30_000..174_000_000).contains(&self.value)
+            || (400_000_000..470_000_000).contains(&self.value)
+    }
 }
 
 impl TryFrom<u32> for FrequencyHz {
     type Error = ();
 
     fn try_from(item: u32) -> Result<Self, Self::Error> {
-        // 30kHz - 174MHz, 400MHz - 470MHz
-        if (30_000..174_000_000).contains(&item) || (400_000_000..470_000_000).contains(&item) {
+        // Only enforces the 9-char wire-format upper bound. Range policy
+        // (radio coverage) lives in is_in_radio_range and is enforced at
+        // the validation layer, where it can be bypassed by CLI flag.
+        if item < 1_000_000_000 {
             Ok(FrequencyHz { value: item })
         } else {
             Err(())
@@ -396,13 +408,23 @@ impl fmt::Display for MemoryChannel {
 //------------------------------------
 // Shift
 //------------------------------------
-// [0: Simplex 1: Plus Shift 2: Minus Shift]
-
+// CAT OS command: [0: Simplex, 1: Plus Shift, 2: Minus Shift, 3: ARS]
+//
+// ARS (Automatic Repeater Shift) lets the radio pick both direction and
+// offset Hz from its built-in band plan. Useful where the per-band offset
+// menu setting doesn't match local convention (e.g. PL 70cm uses 7.6 MHz,
+// not the 5 MHz default).
+//
+// Note: MR/MW only encode Simplex/Plus/Minus (P10 in their spec, no ARS
+// value). Reading a channel back will return the direction ARS resolved
+// to, not "Ars". To write a channel as ARS we send OS with P2=3 between
+// MW and AM in the write sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Shift {
     Simplex = 0x00,
     PlusShift = 0x01,
     MinusShift = 0x02,
+    Ars = 0x03,
 }
 
 impl TryFrom<char> for Shift {
@@ -413,6 +435,7 @@ impl TryFrom<char> for Shift {
             '0' => Ok(Self::Simplex),
             '1' => Ok(Self::PlusShift),
             '2' => Ok(Self::MinusShift),
+            '3' => Ok(Self::Ars),
             _ => Err(()),
         }
     }
@@ -424,6 +447,7 @@ impl fmt::Display for Shift {
             Shift::Simplex => write!(f, "SIMPLEX"),
             Shift::PlusShift => write!(f, "PLUS SHIFT"),
             Shift::MinusShift => write!(f, "MINUS SHIFT"),
+            Shift::Ars => write!(f, "ARS"),
         }
     }
 }
@@ -434,6 +458,20 @@ impl From<Shift> for char {
             Shift::Simplex => '0',
             Shift::PlusShift => '1',
             Shift::MinusShift => '2',
+            Shift::Ars => '3',
+        }
+    }
+}
+
+impl Shift {
+    /// MW P10 only accepts 0/1/2 per the CAT spec — Ars is not a valid
+    /// value there. Returns Simplex when the shift is Ars, because the
+    /// MW step is a placeholder that AM overwrites later in the write
+    /// sequence (OS with the real Ars value runs in between).
+    pub fn to_mw_char(self) -> char {
+        match self {
+            Shift::Ars => '0',
+            other => other.into(),
         }
     }
 }
@@ -497,30 +535,37 @@ impl From<SqlType> for char {
 // Mode
 //------------------------------------
 
+// Mode byte values per the CAT MD spec, plus one observed-but-undocumented:
+//   0:W-FM (documented as '-' but the radio actually uses '0' for wide-FM
+//          broadcast channels — verified empirically against a programmed slot)
+//   1:LSB 2:USB 3:CW-U 4:FM 5:AM 6:RTTY-L 7:CW-L 8:DATA-L 9:RTTY-U
+//   A:DATA-FM B:FM-N C:DATA-U D:AM-N E:PSK F:DATA-FM-N H:C4FM-DN I:C4FM-VW
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Mode {
-    Lsb = 0x01,
-    Usb = 0x02,
-    CwU = 0x03,
-    Fm = 0x04,
-    Am = 0x05,
-    RttyL = 0x06,
-    CwL = 0x07,
-    DataL = 0x08,
-    RttyU = 0x09,
-    DataFm = 0x0a,
-    FmN = 0x0b,
-    DataU = 0x0c,
-    AmN = 0x0d,
-    Psk = 0x0e,
-    DataFmN = 0x0f,
-    C4fmDn = 0x11,
-    C4fmVw = 0x12,
+    Wfm,
+    Lsb,
+    Usb,
+    CwU,
+    Fm,
+    Am,
+    RttyL,
+    CwL,
+    DataL,
+    RttyU,
+    DataFm,
+    FmN,
+    DataU,
+    AmN,
+    Psk,
+    DataFmN,
+    C4fmDn,
+    C4fmVw,
 }
 
 impl From<Mode> for char {
     fn from(item: Mode) -> Self {
         match item {
+            Mode::Wfm => '0',
             Mode::Lsb => '1',
             Mode::Usb => '2',
             Mode::CwU => '3',
@@ -547,6 +592,7 @@ impl TryFrom<char> for Mode {
 
     fn try_from(item: char) -> Result<Self, Self::Error> {
         match item {
+            '0' => Ok(Self::Wfm),
             '1' => Ok(Self::Lsb),
             '2' => Ok(Self::Usb),
             '3' => Ok(Self::CwU),
@@ -580,6 +626,7 @@ impl TryFrom<u8> for Mode {
 impl fmt::Display for Mode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Mode::Wfm => write!(f, "W-FM"),
             Mode::Lsb => write!(f, "LSB"),
             Mode::Usb => write!(f, "USB"),
             Mode::CwU => write!(f, "CW-U"),
@@ -606,6 +653,7 @@ impl TryFrom<String> for Mode {
 
     fn try_from(item: String) -> Result<Self, Self::Error> {
         match item.as_str() {
+            "W-FM" => Ok(Self::Wfm),
             "LSB" => Ok(Self::Lsb),
             "USB" => Ok(Self::Usb),
             "CW-U" => Ok(Self::CwU),
@@ -1084,7 +1132,68 @@ impl CmdMw<'_> {
         buffer.append(&mut vec![mw.ch_type.into()]);
         buffer.append(&mut vec![mw.sql_type.into()]);
         buffer.append(&mut vec!['0', '0']); // fixed per CAT spec
-        buffer.append(&mut vec![mw.shift.into()]);
+        buffer.append(&mut vec![mw.shift.to_mw_char()]);
+        Ok(Cmd::tx_buffer(&self.cmd, Some(buffer)))
+    }
+}
+
+//------------------------------------
+// MZ - SPLIT MEMORY
+//
+// Stores a per-channel TX frequency independent of the channel's RX
+// frequency / repeater-shift settings. Useful when the band-plan ARS
+// and per-band offset menu can't express the local convention (e.g.
+// a non-standard cross-band repeater).
+//
+// Wire format:
+//   Set : MZ ccccc s fffffffff ;
+//   Read: MZ ccccc ;          → MZ ccccc s fffffffff ;
+//     ccccc — 5-char channel id (memory or PMS)
+//     s     — '0' = SPLIT off, '1' = SPLIT on
+//     fffff... — 9-char TX frequency in Hz
+//------------------------------------
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MzReply {
+    pub channel: MemoryChannel,
+    pub split_on: bool,
+    pub tx_frequency_hz: FrequencyHz,
+}
+
+pub struct CmdMz<'a> {
+    cmd: Cmd<'a>,
+}
+
+pub const CMD_MZ: CmdMz<'static> = CmdMz { cmd: Cmd { code: &['M', 'Z'], read_params: 15 } };
+
+impl CmdMz<'_> {
+    pub fn read(&self, ch: MemoryChannel) -> Vec<u8> {
+        let s = ch.to_chars().unwrap();
+        Cmd::tx_buffer(&self.cmd, Some(s.to_vec()))
+    }
+
+    pub fn decode(&self, buffer: &[u8]) -> Result<MzReply, ()> {
+        Cmd::is_reply_ok(&self.cmd, buffer)?;
+        let chars: [char; 5] = [
+            buffer[2] as char, buffer[3] as char, buffer[4] as char,
+            buffer[5] as char, buffer[6] as char,
+        ];
+        let channel = MemoryChannel::try_from(&chars)?;
+        let split_on = match buffer[7] as char {
+            '0' => false,
+            '1' => true,
+            _ => return Err(()),
+        };
+        let tx_frequency_hz = FrequencyHz::try_from(&buffer[8..17])?;
+        Ok(MzReply { channel, split_on, tx_frequency_hz })
+    }
+
+    pub fn set(&self, ch: MemoryChannel, split_on: bool, tx_freq: FrequencyHz) -> Result<Vec<u8>, ()> {
+        let mut buffer = Vec::<char>::new();
+        buffer.append(ch.to_chars()?.to_vec().as_mut());
+        buffer.push(if split_on { '1' } else { '0' });
+        let freq_str: String = tx_freq.into();
+        buffer.append(freq_str.chars().collect::<Vec<char>>().as_mut());
         Ok(Cmd::tx_buffer(&self.cmd, Some(buffer)))
     }
 }
@@ -1349,19 +1458,31 @@ mod tests {
     }
 
     #[test]
-    fn test_frequency_hz_from_u32_valid() {
+    fn test_frequency_hz_from_u32_accepts_any_9_digit() {
+        // try_from now only enforces the 9-char wire-format limit; radio
+        // coverage is checked separately via is_in_radio_range.
         assert!(FrequencyHz::try_from(30_000).is_ok());
         assert!(FrequencyHz::try_from(173_999_999).is_ok());
         assert!(FrequencyHz::try_from(400_000_000).is_ok());
         assert!(FrequencyHz::try_from(469_999_999).is_ok());
+        // Previously rejected (outside radio range), now accepted at the
+        // type level so MARS-CAP / SATCOM use cases can express them.
+        assert!(FrequencyHz::try_from(29_999).is_ok());
+        assert!(FrequencyHz::try_from(255_250_000).is_ok()); // SATCOM band
+        assert!(FrequencyHz::try_from(0).is_ok());
+        // Still rejected: doesn't fit in 9-char wire format.
+        assert!(FrequencyHz::try_from(1_000_000_000).is_err());
     }
 
     #[test]
-    fn test_frequency_hz_from_u32_invalid() {
-        assert!(FrequencyHz::try_from(29_999).is_err());
-        assert!(FrequencyHz::try_from(174_000_000).is_err());
-        assert!(FrequencyHz::try_from(399_999_999).is_err());
-        assert!(FrequencyHz::try_from(470_000_000).is_err());
+    fn test_frequency_hz_is_in_radio_range() {
+        assert!(FrequencyHz::try_from(30_000).unwrap().is_in_radio_range());
+        assert!(FrequencyHz::try_from(146_940_000).unwrap().is_in_radio_range());
+        assert!(FrequencyHz::try_from(469_999_999).unwrap().is_in_radio_range());
+        // Outside stock receiver coverage — needs --allow-any-frequency.
+        assert!(!FrequencyHz::try_from(29_999).unwrap().is_in_radio_range());
+        assert!(!FrequencyHz::try_from(255_250_000).unwrap().is_in_radio_range());
+        assert!(!FrequencyHz::try_from(174_000_000).unwrap().is_in_radio_range());
     }
 
     #[test]
@@ -1373,7 +1494,9 @@ mod tests {
     fn test_frequency_hz_from_bytes_invalid() {
         assert!(FrequencyHz::try_from("00700000".as_bytes()).is_err()); // Invalid length
         assert!(FrequencyHz::try_from("0070000000".as_bytes()).is_err()); // Invalid length
-        assert!(FrequencyHz::try_from("000000001".as_bytes()).is_err()); // Invalid value
+        // "000000001" used to be rejected as out-of-range; now accepted, since
+        // type-level validation is wire-format only.
+        assert_eq!(FrequencyHz::try_from("000000001".as_bytes()).unwrap().value, 1);
     }
 
     #[test]
@@ -1431,6 +1554,70 @@ mod tests {
         assert_eq!(Mode::try_from("C4FM-VW".to_string()), Ok(Mode::C4fmVw));
         assert_eq!(format!("{}", Mode::C4fmDn), "C4FM-DN");
         assert_eq!(format!("{}", Mode::C4fmVw), "C4FM-VW");
+    }
+
+    #[test]
+    fn test_cmd_mz_set_wire_format() {
+        let ch = MemoryChannel::Mem(19);
+        let tx = FrequencyHz::try_from(431_400_000u32).unwrap();
+        let buf = CMD_MZ.set(ch, true, tx).unwrap();
+        // MZ + 5-char channel + '1' (split on) + 9-char freq + ';'
+        assert_eq!(buf.as_slice(), b"MZ000191431400000;");
+    }
+
+    #[test]
+    fn test_cmd_mz_set_split_off_wire_format() {
+        let ch = MemoryChannel::Mem(20);
+        let tx = FrequencyHz::try_from(146_940_000u32).unwrap();
+        let buf = CMD_MZ.set(ch, false, tx).unwrap();
+        assert_eq!(buf.as_slice(), b"MZ000200146940000;");
+    }
+
+    #[test]
+    fn test_cmd_mz_read_wire_format() {
+        let ch = MemoryChannel::Mem(19);
+        let buf = CMD_MZ.read(ch);
+        assert_eq!(buf.as_slice(), b"MZ00019;");
+    }
+
+    #[test]
+    fn test_cmd_mz_decode_split_on() {
+        let reply = CMD_MZ.decode(b"MZ000191431400000;").unwrap();
+        assert_eq!(reply.channel, MemoryChannel::Mem(19));
+        assert!(reply.split_on);
+        assert_eq!(reply.tx_frequency_hz.to_u32(), 431_400_000);
+    }
+
+    #[test]
+    fn test_cmd_mz_decode_split_off() {
+        let reply = CMD_MZ.decode(b"MZ000200146940000;").unwrap();
+        assert_eq!(reply.channel, MemoryChannel::Mem(20));
+        assert!(!reply.split_on);
+    }
+
+    #[test]
+    fn test_cmd_mz_decode_rejects_malformed() {
+        // Bad split flag (not '0' or '1')
+        assert!(CMD_MZ.decode(b"MZ00019X431400000;").is_err());
+        // Non-digit in the 9-char frequency field
+        assert!(CMD_MZ.decode(b"MZ000191ABCDEFGHI;").is_err());
+    }
+
+    #[test]
+    fn test_shift_ars_roundtrip() {
+        // Char encoding for the OS command — 3 means ARS.
+        assert_eq!(char::from(Shift::Ars), '3');
+        assert_eq!(Shift::try_from('3'), Ok(Shift::Ars));
+        // Display string used in tables and the CSV column.
+        assert_eq!(format!("{}", Shift::Ars), "ARS");
+        // MW P10 doesn't accept ARS — must clamp to a documented value
+        // (Simplex). The OS+AM step in the write sequence sets the real
+        // Ars after this placeholder.
+        assert_eq!(Shift::Ars.to_mw_char(), '0');
+        // Non-Ars values pass through to_mw_char unchanged.
+        assert_eq!(Shift::Simplex.to_mw_char(), '0');
+        assert_eq!(Shift::PlusShift.to_mw_char(), '1');
+        assert_eq!(Shift::MinusShift.to_mw_char(), '2');
     }
 
     #[test]

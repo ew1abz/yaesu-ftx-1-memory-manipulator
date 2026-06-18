@@ -4,7 +4,7 @@ use comfy_table::{Attribute, Cell, Color, ContentArrangement, Table};
 use indicatif::ProgressBar;
 use log::{debug, error, trace};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::iter::zip;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -13,7 +13,7 @@ mod ftx1;
 use ftx1::*;
 
 const RX_BUFFER_SIZE: usize = 255;
-const CHANNELS: u16 = 100;
+const CHANNELS: u16 = 999;
 
 /// A simple program to interact with Yaesu FT-DX1 series radios
 #[derive(Parser, Debug)]
@@ -64,6 +64,17 @@ struct Cli {
     /// Suppress all output (progress bars, status messages, table)
     #[arg(short, long)]
     quiet: bool,
+
+    /// Disable non-blocking validation warnings (currently: duplicate-frequency detection)
+    #[arg(long)]
+    no_warnings: bool,
+
+    /// Accept frequencies outside the FTX-1's documented receiver coverage
+    /// (30 kHz–174 MHz, 400–470 MHz). Useful for MARS-CAP-modified radios
+    /// programming SATCOM or the 174–400 MHz gap. The radio will still
+    /// reject anything it can't actually tune.
+    #[arg(long)]
+    allow_any_frequency: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -92,6 +103,10 @@ struct CsvRecord {
     ctcss_tone: String,
     #[serde(rename = "DCS Tone")]
     dcs_tone: String,
+    /// Optional split-memory TX frequency. Empty cell or missing column = no
+    /// split (TX = RX). Set to a Hz value to enable per-channel split via MZ.
+    #[serde(rename = "Split TX (Hz)", default)]
+    tx_frequency_hz: Option<u32>,
 }
 
 impl TryFrom<CsvRecord> for MemoryReadWrite {
@@ -167,7 +182,7 @@ fn main() -> Result<(), ()> {
         write_radio_data(&cli, &file)?;
     } else if cli.check_data {
         let file = require_file(&cli.file, "--check-data")?;
-        check_data(&file, cli.quiet, true)?;
+        check_data(&file, cli.quiet, true, !cli.no_warnings, cli.allow_any_frequency)?;
     } else if cli.print {
         let file = require_file(&cli.file, "--print")?;
         print_table(&file, cli.plain, cli.quiet)?;
@@ -178,7 +193,7 @@ fn main() -> Result<(), ()> {
     Ok(())
 }
 
-fn check_data(file_path: &str, quiet: bool, verbose: bool) -> Result<(), ()> {
+fn check_data(file_path: &str, quiet: bool, verbose: bool, warnings_enabled: bool, allow_any_frequency: bool) -> Result<(), ()> {
     let mut rdr = csv::ReaderBuilder::new()
         .comment(Some(b'#'))
         .from_path(file_path)
@@ -187,11 +202,13 @@ fn check_data(file_path: &str, quiet: bool, verbose: bool) -> Result<(), ()> {
         })?;
     let mut valid_records = 0;
     let mut invalid_records = 0;
+    let mut warnings_count: u32 = 0;
     let mut seen_channels: HashSet<String> = HashSet::new();
+    let mut seen_frequencies: HashMap<u32, (String, Option<String>)> = HashMap::new();
     let mut duplicates_found = false;
 
     for (i, result) in rdr.deserialize().enumerate() {
-        let record: CsvRecord = match result {
+        let mut record: CsvRecord = match result {
             Ok(r) => r,
             Err(e) => {
                 if !quiet { println!("Error deserializing record {}: {}", i + 1, e); }
@@ -199,8 +216,9 @@ fn check_data(file_path: &str, quiet: bool, verbose: bool) -> Result<(), ()> {
                 continue;
             }
         };
+        normalize_record(&mut record);
 
-        let mut errors = match validate_record(&record) {
+        let mut errors = match validate_record(&record, allow_any_frequency) {
             Ok(_) => Vec::new(),
             Err(e) => e,
         };
@@ -209,15 +227,44 @@ fn check_data(file_path: &str, quiet: bool, verbose: bool) -> Result<(), ()> {
             duplicates_found = true;
         }
 
+        let mut warnings: Vec<String> = Vec::new();
+        if warnings_enabled {
+            match seen_frequencies.get(&record.freq) {
+                Some((prev_ch, prev_tag)) => {
+                    let prev_label = match prev_tag {
+                        Some(t) if !t.trim().is_empty() => format!("'{}' ({})", prev_ch, t.trim()),
+                        _ => format!("'{}'", prev_ch),
+                    };
+                    let cur_label = match &record.tag {
+                        Some(t) if !t.trim().is_empty() => format!(" ({})", t.trim()),
+                        _ => String::new(),
+                    };
+                    warnings.push(format!(
+                        "Frequency {} Hz{} is also used by channel {}.",
+                        record.freq, cur_label, prev_label
+                    ));
+                }
+                None => {
+                    seen_frequencies.insert(record.freq, (record.channel.clone(), record.tag.clone()));
+                }
+            }
+        }
+
         if errors.is_empty() {
             valid_records += 1;
         } else {
             invalid_records += 1;
-            if !quiet {
-                println!("Record {} is invalid:", i + 1);
-                for error in errors {
-                    println!("  - {}", error);
-                }
+        }
+        warnings_count += warnings.len() as u32;
+
+        if !quiet && (!errors.is_empty() || !warnings.is_empty()) {
+            let label = if errors.is_empty() { "has warnings" } else { "is invalid" };
+            println!("Record {} {}:", i + 1, label);
+            for error in errors {
+                println!("  - {}", error);
+            }
+            for warning in &warnings {
+                println!("  ! {}", warning);
             }
         }
     }
@@ -227,10 +274,19 @@ fn check_data(file_path: &str, quiet: bool, verbose: bool) -> Result<(), ()> {
         println!("Total records processed: {}", valid_records + invalid_records);
         println!("Valid records: {}", valid_records);
         println!("Invalid records: {}", invalid_records);
+        if warnings_count > 0 {
+            println!("Warnings: {}", warnings_count);
+        }
     }
 
     if invalid_records == 0 {
-        if verbose && !quiet { println!("\nData looks good!"); }
+        if verbose && !quiet {
+            if warnings_count > 0 {
+                println!("\nData is valid ({} warning(s) — see above).", warnings_count);
+            } else {
+                println!("\nData looks good!");
+            }
+        }
         Ok(())
     } else {
         if verbose && !quiet { println!("\nData has issues and may not be processable."); }
@@ -244,7 +300,19 @@ fn check_data(file_path: &str, quiet: bool, verbose: bool) -> Result<(), ()> {
     }
 }
 
-fn validate_record(record: &CsvRecord) -> Result<(), Vec<String>> {
+// Normalise fields a spreadsheet (LibreOffice, Excel) is likely to have
+// mangled on a save round-trip. Only the leading-zero numeric memory channel
+// format (00001–00999) is affected: spreadsheets open it as Number and strip
+// the zeros. PMS (`P-01L`), 5MHz band (`50001`), and EMGCH already survive
+// because they contain non-digits or no leading zero.
+fn normalize_record(record: &mut CsvRecord) {
+    let ch = &record.channel;
+    if (1..5).contains(&ch.len()) && ch.chars().all(|c| c.is_ascii_digit()) {
+        record.channel = format!("{:0>5}", ch);
+    }
+}
+
+fn validate_record(record: &CsvRecord, allow_any_frequency: bool) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
 
     // Validate channel
@@ -258,9 +326,16 @@ fn validate_record(record: &CsvRecord) -> Result<(), Vec<String>> {
         }
     }
 
-    // Validate frequency
-    if FrequencyHz::try_from(record.freq).is_err() {
-        errors.push(format!("Frequency '{}' is not valid.", record.freq));
+    // Validate frequency. The type-level check enforces the 9-char wire-format
+    // limit; the radio-coverage range check is gated by --allow-any-frequency
+    // so MARS-CAP units can program out-of-band channels.
+    match FrequencyHz::try_from(record.freq) {
+        Err(_) => errors.push(format!("Frequency '{}' is not valid.", record.freq)),
+        Ok(f) if !allow_any_frequency && !f.is_in_radio_range() => errors.push(format!(
+            "Frequency '{}' is not valid: outside the radio's documented coverage (30 kHz\u{2013}174 MHz, 400\u{2013}470 MHz). Pass --allow-any-frequency for MARS-CAP units.",
+            record.freq
+        )),
+        Ok(_) => {}
     }
 
     // Validate clarifier offset: 0000 - 9990 (Hz)
@@ -271,25 +346,9 @@ fn validate_record(record: &CsvRecord) -> Result<(), Vec<String>> {
         ));
     }
 
-    // Validate mode
-    const VALID_MODES: &[&str] = &[
-        "LSB",
-        "USB",
-        "CW-U",
-        "FM",
-        "AM",
-        "RTTY-L",
-        "CW-L",
-        "DATA-L",
-        "RTTY-U",
-        "DATA-FM",
-        "FM-N",
-        "DATA-U",
-        "AM-N",
-        "PSK",
-        "DATA-FM-N",
-    ];
-    if !VALID_MODES.contains(&record.mode.as_str()) {
+    // Validate mode via the canonical Mode::try_from rather than a duplicated
+    // allowlist, so check_data never drifts from what MemoryReadWrite accepts.
+    if Mode::try_from(record.mode.clone()).is_err() {
         errors.push(format!("Mode '{}' is not a valid mode.", record.mode));
     }
 
@@ -316,7 +375,7 @@ fn print_table(file_path: &str, plain: bool, quiet: bool) -> Result<(), ()> {
             .set_content_arrangement(ContentArrangement::Dynamic);
     }
 
-    let headers = ["Ch", "Frequency", "Tag", "Mode", "Type", "Squelch", "Shift", "Clar (Hz)", "RX Clar", "TX Clar", "CTCSS", "DCS"];
+    let headers = ["Ch", "Frequency", "Tag", "Mode", "Type", "Squelch", "Shift", "Clar (Hz)", "RX Clar", "TX Clar", "CTCSS", "DCS", "Split TX"];
     table.set_header(headers.iter().map(|h| {
         if plain {
             Cell::new(h)
@@ -361,6 +420,10 @@ fn print_table(file_path: &str, plain: bool, quiet: bool) -> Result<(), ()> {
             make(r.tx_clarifier_enabled.to_string(), if tx_clar_on { Color::Green } else { Color::DarkGrey }),
             make(r.ctcss_tone,                                                       Color::DarkGrey),
             make(r.dcs_tone,                                                         Color::DarkGrey),
+            match r.tx_frequency_hz {
+                Some(hz) => make(format!("{:.3} MHz", hz as f64 / 1_000_000.0),      Color::Magenta),
+                None     => make(String::new(),                                      Color::DarkGrey),
+            },
         ]);
     }
     println!("{table}");
@@ -385,20 +448,29 @@ fn read_radio_data(cli: &Cli) -> Result<(), ()> {
     }
     bar.finish();
 
+    // Pre-compute the per-channel numeric ids from the MR results. Earlier
+    // versions iterated 1..=memory_list.len() which silently broke when the
+    // programmed channels weren't contiguous starting at 1 (tags landed on
+    // the wrong rows). This pulls the real channel number out of each MR
+    // response so the secondary lookups can't go out of sync.
+    let channel_numbers: Vec<u16> = memory_list
+        .iter()
+        .filter_map(|m| if let MemoryChannel::Mem(n) = &m.channel { Some(*n) } else { None })
+        .collect();
+
     if !quiet { println!("Reading memory tags..."); }
-    let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(memory_list.len() as u64) };
+    let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(channel_numbers.len() as u64) };
     let mut tag_list: Vec<Option<String>> = Vec::new();
-    for ch in 1..=memory_list.len() as u16 {
+    for &ch in &channel_numbers {
         bar.inc(1);
-        let tag = read_tag(&mut *port, ch);
-        tag_list.push(tag);
+        tag_list.push(read_tag(&mut *port, ch));
     }
     bar.finish();
 
     if !quiet { println!("Reading tone info..."); }
-    let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(memory_list.len() as u64) };
+    let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(channel_numbers.len() as u64) };
     let mut tone_list: Vec<(ToneCode, ToneCode)> = Vec::new();
-    for ch in 1..=memory_list.len() as u16 {
+    for &ch in &channel_numbers {
         bar.inc(1);
         // There is no answer for this command, so we ignore the result
         let _ = cat_send(&mut *port, &CMD_MC.set(Side::Sub, MemoryChannel::Mem(ch)))?;
@@ -409,8 +481,17 @@ fn read_radio_data(cli: &Cli) -> Result<(), ()> {
         tone_list.push((ctcss_tone_decoded.tone_code, dcs_tone_decoded.tone_code));
     }
 
-    // Combine memory data, tags and tones into CSV records
-    for (m, (tag, tone)) in zip(memory_list, zip(tag_list, tone_list)) {
+    if !quiet { println!("Reading split memory info..."); }
+    let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(channel_numbers.len() as u64) };
+    let mut split_list: Vec<Option<u32>> = Vec::new();
+    for &ch in &channel_numbers {
+        bar.inc(1);
+        split_list.push(read_split(&mut *port, ch));
+    }
+    bar.finish();
+
+    // Combine memory data, tags, tones and split memory into CSV records
+    for (m, ((tag, tone), tx)) in zip(memory_list, zip(zip(tag_list, tone_list), split_list)) {
         let rec = CsvRecord {
             channel: m.channel.to_string()?,
             tag,
@@ -424,6 +505,7 @@ fn read_radio_data(cli: &Cli) -> Result<(), ()> {
             shift: m.shift,
             ctcss_tone: CmdCn::tone_code_to_string(ToneType::Ctcss, tone.0)?,
             dcs_tone: CmdCn::tone_code_to_string(ToneType::Dcs, tone.1)?,
+            tx_frequency_hz: tx,
         };
         // println!("{:?}", rec);
         wtr.serialize(&rec).unwrap();
@@ -457,6 +539,14 @@ fn read_tag(port: &mut dyn serialport::SerialPort, ch: u16) -> Option<String> {
         Err(e) => error!("Error: {:?}", e),
     }
     d.ok()
+}
+
+// Returns Some(tx_freq_hz) only when split memory is enabled on the channel.
+// None means split is off (TX = RX) or the channel couldn't be read.
+fn read_split(port: &mut dyn serialport::SerialPort, ch: u16) -> Option<u32> {
+    let rx = cat_send(port, &CMD_MZ.read(MemoryChannel::Mem(ch))).ok()?;
+    let reply = CMD_MZ.decode(&rx).ok()?;
+    if reply.split_on { Some(reply.tx_frequency_hz.to_u32()) } else { None }
 }
 
 fn cat_send(port: &mut dyn serialport::SerialPort, data: &[u8]) -> Result<Vec<u8>, ()> {
@@ -502,14 +592,17 @@ fn open_radio(port_name: &String, port_peed: u32, quiet: bool) -> Result<Box<dyn
 
 fn write_radio_data(cli: &Cli, file: &str) -> Result<(), ()> {
     let quiet = cli.quiet;
-    check_data(file, quiet, false)?;
+    check_data(file, quiet, false, !cli.no_warnings, cli.allow_any_frequency)?;
     let mut port = open_radio(&cli.port, cli.speed, quiet)?;
 
     let mut rdr = csv::ReaderBuilder::new()
         .comment(Some(b'#'))
         .from_path(file)
         .map_err(|_| ())?;
-    let records: Vec<CsvRecord> = rdr.deserialize::<CsvRecord>().filter_map(|r| r.ok()).collect();
+    let mut records: Vec<CsvRecord> = rdr.deserialize::<CsvRecord>().filter_map(|r| r.ok()).collect();
+    for r in &mut records {
+        normalize_record(r);
+    }
     if !quiet { println!("Writing memory data from CSV file: {} ({} records)... ", file, records.len()); }
     let bar = if quiet { ProgressBar::hidden() } else { ProgressBar::new(records.len() as u64) };
     for rec in records {
@@ -540,8 +633,16 @@ fn write_radio_data(cli: &Cli, file: &str) -> Result<(), ()> {
         let _ = cat_send(&mut *port, &CMD_AM.save())?;
         if let Some(tag) = rec.tag {
             debug!("Writing tag for channel: {:?}, tag: {:?}", mem.channel, tag);
-            let _ = cat_send(&mut *port, &CMD_MT.set(mem.channel, tag)?)?;
+            let _ = cat_send(&mut *port, &CMD_MT.set(mem.channel.clone(), tag)?)?;
         }
+        // Split memory: enable with the explicit TX freq when set, or
+        // explicitly disable so a re-import correctly clears prior split state.
+        // P3 is required even when P2=0; reuse the RX freq as a valid placeholder.
+        let (split_on, tx_freq) = match rec.tx_frequency_hz {
+            Some(hz) => (true, FrequencyHz::try_from(hz)?),
+            None => (false, mem.frequency_hz),
+        };
+        let _ = cat_send(&mut *port, &CMD_MZ.set(mem.channel, split_on, tx_freq)?)?;
     }
     bar.finish();
     if !quiet { println!("Memory data written to radio."); }

@@ -140,6 +140,88 @@ fn check_data_missing_file() {
     assert_failure(&out);
 }
 
+#[test]
+fn check_data_duplicate_frequency_warns_but_passes() {
+    let out = bin()
+        .args(["--check-data", "--file", fixture("duplicate_frequency.csv").to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("has warnings"), "expected warning banner in stdout: {stdout}");
+    assert!(stdout.contains("is also used by channel '00001'"), "expected dup-frequency warning text: {stdout}");
+    assert!(stdout.contains("Warnings: 1"), "expected warning count in summary: {stdout}");
+}
+
+#[test]
+fn check_data_accepts_libreoffice_mangled_channel_numbers() {
+    let out = bin()
+        .args(["--check-data", "--file", fixture("libreoffice_mangled.csv").to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Data looks good!"), "expected lenient acceptance: {stdout}");
+    assert!(stdout.contains("Valid records: 2"), "expected both rows valid: {stdout}");
+}
+
+#[test]
+fn check_data_accepts_split_memory_column() {
+    let out = bin()
+        .args(["--check-data", "--file", fixture("with_split_memory.csv").to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Valid records: 2"), "expected both rows valid: {stdout}");
+}
+
+#[test]
+fn check_data_rejects_out_of_band_frequency_by_default() {
+    let out = bin()
+        .args(["--check-data", "--file", fixture("out_of_band_frequency.csv").to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_failure(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("outside the radio's documented coverage"), "expected policy error: {stdout}");
+    assert!(stdout.contains("--allow-any-frequency"), "expected pointer to the flag: {stdout}");
+}
+
+#[test]
+fn check_data_allows_out_of_band_frequency_with_flag() {
+    let out = bin()
+        .args([
+            "--check-data",
+            "--allow-any-frequency",
+            "--file",
+            fixture("out_of_band_frequency.csv").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Data looks good!"), "expected clean verdict: {stdout}");
+}
+
+#[test]
+fn check_data_no_warnings_flag_suppresses_dup_frequency() {
+    let out = bin()
+        .args([
+            "--check-data",
+            "--no-warnings",
+            "--file",
+            fixture("duplicate_frequency.csv").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_success(&out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.contains("has warnings"), "warnings should be suppressed: {stdout}");
+    assert!(!stdout.contains("is also used by channel"), "warnings should be suppressed: {stdout}");
+    assert!(stdout.contains("Data looks good!"), "expected clean verdict: {stdout}");
+}
+
 // ---------------------------------------------------------------------------
 // Group 2: CLI argument handling (no radio required)
 // ---------------------------------------------------------------------------
@@ -300,6 +382,71 @@ fn write_radio_roundtrip() {
     assert_eq!(normalise_csv(&before), normalise_csv(&after), "CSV mismatch after roundtrip");
 
     let _ = std::fs::remove_file(&before);
+    let _ = std::fs::remove_file(&after);
+}
+
+// Targeted test: writes channels 19 + 20 (one with split memory, one without),
+// reads them back, and asserts the Split TX (Hz) column round-trips. Restores
+// the prior state by re-writing the full snapshot. Channels 19 and 20 will be
+// programmed afterward even if they were originally empty (no CAT delete).
+#[test]
+#[ignore = "requires physical radio on RADIO_PORT"]
+fn write_split_memory_roundtrip() {
+    require_destructive();
+    let port = radio_port();
+    let backup = temp_csv("split_backup");
+    let after = temp_csv("split_after");
+
+    // 1. Snapshot current state for restore.
+    let out = bin()
+        .args(["--read-radio", "--port", &port, "--file", backup.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_success(&out);
+
+    // 2. Write the fixture (channels 19 + 20).
+    let out = bin()
+        .args([
+            "--write-radio", "--port", &port,
+            "--file", fixture("with_split_memory.csv").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_success(&out);
+
+    // 3. Read everything back.
+    let out = bin()
+        .args(["--read-radio", "--port", &port, "--file", after.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_success(&out);
+
+    let content = std::fs::read_to_string(&after).unwrap();
+    let line_19 = content.lines().find(|l| l.starts_with("00019,"))
+        .expect("channel 00019 missing from read-back");
+    let line_20 = content.lines().find(|l| l.starts_with("00020,"))
+        .expect("channel 00020 missing from read-back");
+
+    // 4a. Channel 19: split must come back with TX = 431400000.
+    assert!(
+        line_19.trim_end().ends_with(",431400000"),
+        "ch19 should round-trip Split TX=431400000, got: {line_19}",
+    );
+    // 4b. Channel 20: split column must be empty (explicitly disabled).
+    assert!(
+        line_20.trim_end().ends_with(",") || !line_20.trim_end().contains(",431400000"),
+        "ch20 should have empty Split TX after write, got: {line_20}",
+    );
+
+    // 5. Restore. Re-writing the snapshot covers channels we touched, except
+    // it can't clear channels 19/20 if they were previously empty.
+    let out = bin()
+        .args(["--write-radio", "--port", &port, "--file", backup.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_success(&out);
+
+    let _ = std::fs::remove_file(&backup);
     let _ = std::fs::remove_file(&after);
 }
 

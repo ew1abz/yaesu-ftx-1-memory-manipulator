@@ -1,0 +1,4 @@
+Channel Number,Frequency (Hz),Memory Tag,Mode,Channel Type,Squelch Type,Shift (Hz),Clarifier Offset (Hz),Rx Clarifier Enabled,Tx Clarifier Enabled,CTCSS Tone,DCS Tone
+00001,146520000,SIMPLEX 1   ,FM,MemoryChannel,CtcssOff,Simplex,0,RxClarifierOff,TxClarifierOff,100.0,23
+00002,146940000,REPEATER    ,FM,MemoryChannel,CtcssEncDec,MinusShift,0,RxClarifierOff,TxClarifierOff,103.5,23
+00003,146520000,DUP OF 1    ,FM-N,MemoryChannel,CtcssEnc,Simplex,0,RxClarifierOff,TxClarifierOff,88.5,23

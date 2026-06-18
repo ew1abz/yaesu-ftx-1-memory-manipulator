@@ -1,0 +1,3 @@
+Channel Number,Frequency (Hz),Memory Tag,Mode,Channel Type,Squelch Type,Shift (Hz),Clarifier Offset (Hz),Rx Clarifier Enabled,Tx Clarifier Enabled,CTCSS Tone,DCS Tone,Split TX (Hz)
+00019,439000000,SPLIT 70CM  ,FM,MemoryChannel,CtcssEncDec,Simplex,0,RxClarifierOff,TxClarifierOff,103.5,23,431400000
+00020,146940000,NO SPLIT    ,FM,MemoryChannel,CtcssEncDec,MinusShift,0,RxClarifierOff,TxClarifierOff,103.5,23,
